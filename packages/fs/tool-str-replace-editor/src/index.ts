@@ -78,6 +78,10 @@ class MutationPolicy {
     })
   }
 
+  standing(exec: ToolRunContext): SandboxExecutionPolicy | undefined {
+    return this.resolve(exec)
+  }
+
   mapError(error: unknown, policy: SandboxExecutionPolicy | undefined): unknown {
     if (!(error instanceof FsError) || error.code !== 'FS_SANDBOX_DENIED') return error
     const mode = (policy as SandboxExecutionPolicy).mode
@@ -102,8 +106,9 @@ async function statExisting(
   target: FsTarget,
   command: 'view' | 'str_replace' | 'insert',
   exec: ToolRunContext,
+  sandboxPolicy?: SandboxExecutionPolicy,
 ): Promise<FsInfo> {
-  const info = await ctx.fs.stat(target, exec.signal)
+  const info = await ctx.fs.stat(target, exec.signal, sandboxPolicy)
   if (info === undefined) {
     ctx.emit('fs/observed', target, { kind: 'absent' }, exec)
     throw new FsError(
@@ -187,9 +192,10 @@ async function listDirectory(
   target: FsTarget,
   maxOutputChars: number,
   exec: ToolRunContext,
+  sandboxPolicy?: SandboxExecutionPolicy,
 ): Promise<string> {
   async function visit(dir: FsTarget, depth: number): Promise<string[]> {
-    const entries = await ctx.fs.listDir(dir, exec.signal)
+    const entries = await ctx.fs.listDir(dir, exec.signal, sandboxPolicy)
     const rows: string[] = []
     for (const entry of entries.filter(candidate =>
       !candidate.name.startsWith('.')
@@ -215,23 +221,25 @@ async function listDirectory(
 
 async function viewPath(
   ctx: Context,
+  policy: MutationPolicy,
   path: string,
   viewRange: number[] | undefined,
   maxOutputChars: number,
   exec: ToolRunContext,
 ): Promise<string> {
   const target = await resolveTarget(ctx, path, exec.signal)
-  const info = await statExisting(ctx, target, 'view', exec)
+  const sandboxPolicy = policy.standing(exec)
+  const info = await statExisting(ctx, target, 'view', exec, sandboxPolicy)
   if (info.type === 'directory') {
     if (viewRange !== undefined) {
       throw new Error('The `view_range` parameter is not allowed when `path` points to a directory.')
     }
-    return listDirectory(ctx, target, maxOutputChars, exec)
+    return listDirectory(ctx, target, maxOutputChars, exec, sandboxPolicy)
   }
   if (info.type !== 'file') {
     throw new FsError(`cannot view "${target.displayPath}": not a regular file or directory`, 'FS_NOT_REGULAR_FILE')
   }
-  const content = await ctx.fs.readText(target, exec.signal)
+  const content = await ctx.fs.readText(target, exec.signal, sandboxPolicy)
   ctx.emit('fs/observed', target, { kind: 'present', version: info.version }, exec)
   return formatFileView(target.displayPath, content, maxOutputChars, viewRange)
 }
@@ -246,7 +254,7 @@ async function createFile(
   const content = requiredForCommand(fileText, 'file_text', 'create')
   const sandboxPolicy = policy.resolve(exec)
   const target = await resolveTarget(ctx, path, exec.signal)
-  if (await ctx.fs.stat(target, exec.signal) !== undefined) {
+  if (await ctx.fs.stat(target, exec.signal, sandboxPolicy) !== undefined) {
     throw new Error(`File already exists at: ${target.displayPath}. Cannot overwrite files using command \`create\`.`)
   }
   const intent = await ctx.waterfall(
@@ -284,11 +292,11 @@ async function replaceInFile(
   const intent = await ctx.waterfall('fs/edit-intent', target, exec, () => undefined)
   const oldValue = requiredForCommand(oldStr, 'old_str', 'str_replace', false)
   const newValue = newStr ?? ''
-  const info = await statExisting(ctx, target, 'str_replace', exec)
+  const info = await statExisting(ctx, target, 'str_replace', exec, sandboxPolicy)
   if (info.type !== 'file') {
     throw new FsError(`cannot edit "${target.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
   }
-  const before = await ctx.fs.readText(target, exec.signal)
+  const before = await ctx.fs.readText(target, exec.signal, sandboxPolicy)
   const offsets = matchOffsets(before, oldValue)
   const offset = offsets[0]
   if (offset === undefined) {
@@ -335,11 +343,11 @@ async function insertInFile(
   const sandboxPolicy = policy.resolve(exec)
   const target = await resolveTarget(ctx, path, exec.signal)
   const intent = await ctx.waterfall('fs/edit-intent', target, exec, () => undefined)
-  const info = await statExisting(ctx, target, 'insert', exec)
+  const info = await statExisting(ctx, target, 'insert', exec, sandboxPolicy)
   if (info.type !== 'file') {
     throw new FsError(`cannot insert into "${target.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
   }
-  const before = await ctx.fs.readText(target, exec.signal)
+  const before = await ctx.fs.readText(target, exec.signal, sandboxPolicy)
   const lines = before.split('\n')
   if (!Number.isInteger(insertLine) || insertLine < 0 || insertLine > lines.length) {
     throw new Error(
@@ -463,7 +471,7 @@ function registerStrReplaceEditor(ctx: Context, config: ResolvedConfig): void {
     async execute(args, exec) {
       switch (args.command) {
         case 'view':
-          return viewPath(ctx, args.path, args.view_range, config.maxOutputChars, exec)
+          return viewPath(ctx, policy, args.path, args.view_range, config.maxOutputChars, exec)
         case 'create':
           return createFile(ctx, policy, args.path, args.file_text, exec)
         case 'str_replace':

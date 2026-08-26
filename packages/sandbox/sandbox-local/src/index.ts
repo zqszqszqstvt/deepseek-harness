@@ -42,6 +42,8 @@ import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from './pr
 
 /** Plugin config. All optional — `static Config` supplies the defaults. */
 export interface Config {
+  /** When true, Linux bwrap mounts only system runtime paths and the session workspace. */
+  strictFilesystem?: boolean
   /**
    * Override the runner argv; bwrap-compatible profile arguments are appended. A
    * non-empty override asserts full enforcement and skips built-in selection and
@@ -253,6 +255,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     runnerCommand: z.array(z.string()).default([]),
     runnerFailureSignatures: z.array(z.string()).default([]),
     probeTimeoutMs: z.natural().default(5_000),
+    strictFilesystem: z.boolean().default(false),
   })
 
   /** Test hook (mirrors the bash executors' `internals`). */
@@ -261,6 +264,7 @@ export class LocalSandboxProvider extends SandboxProvider {
   private readonly runnerCommand: string[] | undefined
   private readonly configuredRunnerFailureSignatures: string[]
   private readonly probeTimeoutMs: number
+  private readonly strictFilesystem: boolean
   /** Cached chain verdict; undefined until the first confined wrap needs it. */
   private selectedRunner: SelectedRunner | 'unavailable' | undefined
   /**
@@ -292,6 +296,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     this.runnerCommand = runner.length > 0 ? runner : undefined
     this.configuredRunnerFailureSignatures = runnerFailureSignatures
     this.probeTimeoutMs = config.probeTimeoutMs as number
+    this.strictFilesystem = config.strictFilesystem === true
     assertPositiveFinite('probeTimeoutMs', this.probeTimeoutMs)
     // The temp grants are revoked with the provider: a clean server
     // shutdown leaves no temp ACEs behind (workspace ACEs stand by design —
@@ -316,13 +321,16 @@ export class LocalSandboxProvider extends SandboxProvider {
   confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv {
     if (this.runnerCommand !== undefined) {
       return {
-        argv: [...this.runnerCommand, ...bwrapProfileArgs(policy), '--', ...argv],
+        argv: [...this.runnerCommand, ...bwrapProfileArgs(policy, this.strictFilesystem), '--', ...argv],
         enforcement: 'full',
         denialSignatures: DENIAL_SIGNATURES.runnerCommand,
         runnerFailureRules: [{ fatalSignatures: this.configuredRunnerFailureSignatures }],
       }
     }
     const selected = this.selectRunner(policy.mode)
+    if (this.strictFilesystem && process.platform === 'linux' && selected.runner !== 'bwrap') {
+      throw new SandboxUnavailableError(policy.mode, 'strictFilesystem requires bubblewrap on Linux')
+    }
     const runnerArgv = this.runnerArgv(selected.runner, policy)
     return {
       argv: [...runnerArgv, '--', ...argv],
@@ -335,7 +343,7 @@ export class LocalSandboxProvider extends SandboxProvider {
   /** The selected rung's runner invocation (program + profile arguments) for one policy. */
   private runnerArgv(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
     switch (runner) {
-      case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy)]
+      case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy, this.strictFilesystem)]
       case 'landlock': return [this.landlockLauncher(), ...landlockProfileArgs(policy)]
       case 'seatbelt': return [this.seatbeltExec(), ...seatbeltProfileArgs(policy)]
       case 'windows-acl': return this.windowsAclRunnerArgv(policy)

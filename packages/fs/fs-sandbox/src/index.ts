@@ -3,9 +3,8 @@
  * `@deepseek-ai/dsh-fs` Service Definition. It extends `LocalFileSystem` so all
  * text-storage mechanics — resolve, stat, read/stream, list, the atomic
  * write and the read-match-write edit critical section — are the local
- * implementation's, verbatim; this package adds only the per-call POLICY fence
- * on the two mutations. Reads pass through untouched: every mode permits
- * reading.
+ * implementation's, verbatim; this package adds per-call policy fences for
+ * mutations and, when strictReads is enabled, for in-process reads.
  *
  * The fence is a policy check in TRUSTED code over a MODEL-CONTROLLED path,
  * NOT a kernel boundary — the operations are the seam's own (open, rename),
@@ -31,10 +30,12 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+import { resolve as resolvePath } from 'node:path'
 import { LocalFileSystem } from '@deepseek-ai/dsh-fs-local'
 import type { Config as LocalConfig } from '@deepseek-ai/dsh-fs-local'
 import { FsError } from '@deepseek-ai/dsh-fs'
-import type { FsEditOutcome, FsEditRequest, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
+import type { FsDirEntry, FsEditOutcome, FsEditRequest, FsInfo, FsPathInfo, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
 import { writableRoots } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
@@ -46,28 +47,86 @@ import { isPathUnder } from './containment.ts'
  * (mode + `workspace-write` fallback root) is NOT here — `ctx.sandboxPolicy`
  * resolves each calling session for every enforcing capability.
  */
-export type Config = LocalConfig
+export interface Config extends LocalConfig {
+  /** When true, every in-process filesystem read is contained in the session workspace. */
+  strictReads?: boolean
+}
 
 /**
  * Sandbox-enforcing filesystem backend. Registers as `ctx.fs` (loading it
  * INSTEAD OF `dsh-fs-local`, together with a `ctx.sandboxPolicy`, is the whole
  * swap — the model-facing tools are untouched). Its configured default mode is
  * the capability fact exposed by {@link sandboxMode}; `dsh-tool-fs` resolves
- * each session's mode and cwd into a policy for every mutation, while an
+ * each session's mode and cwd into a policy for every operation, while an
  * approved escalation may stamp a strictly wider mode for one call.
  */
 export class SandboxedFileSystem extends LocalFileSystem {
   static inject = ['sandboxPolicy']
+  static override Config: z<Config> = z.object({
+    cwd: z.string().default(process.cwd()),
+    diffBasisMaxBytes: z.number().default(10 * 1024 * 1024),
+    strictReads: z.boolean().default(false),
+  })
 
   private readonly defaultMode: SandboxMode
+  private readonly strictReads: boolean
   constructor(ctx: Context, config: Config) {
     super(ctx, config)
     this.defaultMode = ctx.sandboxPolicy.defaultMode
+    this.strictReads = config.strictReads === true
   }
 
   /** The deployment default mode — the capability fact the tool layer reads to advertise escalation. */
   override get sandboxMode(): SandboxMode {
     return this.defaultMode
+  }
+
+  override async stat(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsInfo | undefined> {
+    await this.checkedReadTarget(target, sandboxPolicy)
+    return super.stat(target, signal)
+  }
+
+  override async lstat(
+    path: string,
+    opts?: { cwd?: string },
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<FsPathInfo | undefined> {
+    await this.checkedReadPath(path, opts?.cwd, sandboxPolicy)
+    return super.lstat(path, opts, signal)
+  }
+
+  override async readText(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<string> {
+    await this.checkedReadTarget(target, sandboxPolicy)
+    return super.readText(target, signal)
+  }
+
+  override async streamText(
+    target: FsTarget,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<AsyncIterable<string>> {
+    await this.checkedReadTarget(target, sandboxPolicy)
+    return super.streamText(target, signal)
+  }
+
+  override async readBytes(
+    target: FsTarget,
+    signal: AbortSignal | undefined,
+    maxBytes: number,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<Uint8Array> {
+    await this.checkedReadTarget(target, sandboxPolicy)
+    return super.readBytes(target, signal, maxBytes)
+  }
+
+  override async listDir(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsDirEntry[]> {
+    await this.checkedReadTarget(target, sandboxPolicy)
+    const entries = await super.listDir(target, signal)
+    if (!this.strictReads) return entries
+    const policy = sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
+    for (const entry of entries) await this.checkedReadTarget(entry.target, policy)
+    return entries
   }
 
   /**
@@ -145,6 +204,27 @@ export class SandboxedFileSystem extends LocalFileSystem {
       throw new FsError(`cannot write "${target.displayPath}": file access denied under workspace-write mode`, 'FS_SANDBOX_DENIED')
     }
     return fresh
+  }
+
+  /** Enforce the session workspace boundary for an already resolved target. */
+  private async checkedReadTarget(target: FsTarget, sandboxPolicy?: SandboxExecutionPolicy): Promise<void> {
+    if (!this.strictReads) return
+    const policy = sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
+    if (policy.mode === 'danger-full-access') return
+    if (!await isPathUnder(String(target.targetKey), policy.workspaceRoot)) {
+      throw new FsError(`cannot read "${target.displayPath}": file access denied outside the session workspace`, 'FS_SANDBOX_DENIED')
+    }
+  }
+
+  /** Enforce containment for path-shaped lstat calls before following nothing. */
+  private async checkedReadPath(path: string, cwd: string | undefined, sandboxPolicy?: SandboxExecutionPolicy): Promise<void> {
+    if (!this.strictReads) return
+    const policy = sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
+    if (policy.mode === 'danger-full-access') return
+    const displayPath = resolvePath(cwd ?? this.config.cwd, path)
+    if (!await isPathUnder(displayPath, policy.workspaceRoot)) {
+      throw new FsError(`cannot inspect "${displayPath}": file access denied outside the session workspace`, 'FS_SANDBOX_DENIED')
+    }
   }
 }
 

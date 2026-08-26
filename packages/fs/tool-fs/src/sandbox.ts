@@ -107,6 +107,11 @@ export class FsSandboxController {
     return { ...policy, mode: approvedMode }
   }
 
+  /** Resolve the current session policy for read-only operations. */
+  standingPolicy(exec: ToolExecution): SandboxExecutionPolicy | undefined {
+    return this.policy?.resolve({ ...exec.agent ? { session: exec.agent.session } : {} })
+  }
+
   /**
    * Map a thrown provider error for the model: a `FS_SANDBOX_DENIED` becomes a
    * `FsError` whose text is the shared `[sandbox: …]` denial marker plus the

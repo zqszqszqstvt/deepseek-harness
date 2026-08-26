@@ -117,6 +117,11 @@ interface LocalLocator {
   directory: string
 }
 
+interface FsReadPolicy {
+  mode: 'workspace-write'
+  workspaceRoot: string
+}
+
 interface ResolvedWatchConfig {
   enabled: boolean
   usePolling: boolean
@@ -190,7 +195,7 @@ export class FileSystemSkillProvider implements SkillProvider {
     }
     const candidates: SkillCandidate[] = []
     for (const root of roots) {
-      for (const skill of await discoverRoot(root, this.ctx, this.name)) {
+      for (const skill of await discoverRoot(root, this.ctx, this.name, options.cwd)) {
         candidates.push(skill)
       }
     }
@@ -205,7 +210,7 @@ export class FileSystemSkillProvider implements SkillProvider {
    */
   async get(candidate: SkillCandidate, options: SkillLookupOptions): Promise<SkillDefinition | undefined> {
     const locator = candidate.locator as LocalLocator
-    const parsed = await parseSkillFile(locator.path, this.ctx, options.signal, candidate.source === 'bundled')
+    const parsed = await parseSkillFile(locator.path, this.ctx, options.signal, candidate.source === 'bundled', readPolicy(options.cwd))
     if (parsed === undefined) return undefined
     return {
       name: parsed.name,
@@ -396,7 +401,6 @@ class SkillWatchManager {
       const current = await resolveRootWatchMode(state.root.path, this.config.followSymlinks)
       // A child unlink can publish an empty catalog before root unlinkDir arrives.
       // Discovery therefore revalidates the retained handle independently.
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- watcher callbacks can mark unhealthy while the probe awaits
       if (!state.unhealthy && sameWatchMode(watcher.mode, current)) return
     }
     await this.replaceWatcher(state)
@@ -413,7 +417,6 @@ class SkillWatchManager {
       /* v8 ignore next -- The loop returns no handle only when teardown wins between awaited probes. */
       if (watcher === undefined) return
       /* v8 ignore start -- Post-open teardown is timing-dependent; the disposal race has an explicit integration test. */
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- teardown can race awaited watcher startup
       if (this.closing || state.owners.size === 0) {
         await this.closeWatcher(watcher)
         return
@@ -422,7 +425,6 @@ class SkillWatchManager {
       state.watcher = watcher
       state.unhealthy = false
     } catch (error) {
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- teardown can race awaited watcher startup
       if (!this.closing) {
         state.unhealthy = true
         this.ctx.logger.warn(`skill-filesystem: failed to watch ${state.root.path}: ${errorMessage(error)}`)
@@ -710,15 +712,17 @@ function isAbsentSkillPathError(error: unknown): boolean {
   return isAbsentPathError(error)
     || hasErrorCode(error, 'FS_NOT_FOUND')
     || hasErrorCode(error, 'FS_NOT_DIRECTORY')
+    || hasErrorCode(error, 'FS_SANDBOX_DENIED')
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === code
 }
 
-async function discoverRoot(root: SkillRoot, ctx: Context, provider: string): Promise<SkillCandidate[]> {
+async function discoverRoot(root: SkillRoot, ctx: Context, provider: string, cwd?: string): Promise<SkillCandidate[]> {
   const skills: SkillCandidate[] = []
-  const entries = await listSkillRootEntries(root, ctx)
+  const sandboxPolicy = readPolicy(cwd)
+  const entries = await listSkillRootEntries(root, ctx, sandboxPolicy)
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (root.skipSystem && entry.name === '.system') continue
     const locator = entry.type === 'directory'
@@ -727,7 +731,7 @@ async function discoverRoot(root: SkillRoot, ctx: Context, provider: string): Pr
         ? { path: entry.path, directory: root.path }
         : undefined
     if (locator === undefined) continue
-    const parsed = await parseSkillFile(locator.path, ctx, undefined, root.trustedHost === true)
+    const parsed = await parseSkillFile(locator.path, ctx, undefined, root.trustedHost === true, sandboxPolicy)
     if (parsed === undefined) continue
     skills.push({
       name: parsed.name,
@@ -746,24 +750,24 @@ async function discoverRoot(root: SkillRoot, ctx: Context, provider: string): Pr
   return skills
 }
 
-async function listSkillRootEntries(root: SkillRoot, ctx: Context): Promise<SkillRootEntry[]> {
+async function listSkillRootEntries(root: SkillRoot, ctx: Context, sandboxPolicy: FsReadPolicy): Promise<SkillRootEntry[]> {
   const fs = optionalFileSystem(ctx)
-  if (fs !== undefined && root.trustedHost !== true) return await listSkillRootEntriesFromFileSystem(root, fs)
+  if (fs !== undefined && root.trustedHost !== true) return await listSkillRootEntriesFromFileSystem(root, fs, sandboxPolicy)
   return await listSkillRootEntriesFromNode(root, ctx)
 }
 
-async function listSkillRootEntriesFromFileSystem(root: SkillRoot, fs: FileSystem): Promise<SkillRootEntry[]> {
+async function listSkillRootEntriesFromFileSystem(root: SkillRoot, fs: FileSystem, sandboxPolicy: FsReadPolicy): Promise<SkillRootEntry[]> {
   try {
-    return (await fsListDir(fs, root.path)).map(entryFromFs)
+    return (await fsListDir(fs, root.path, sandboxPolicy)).map(entryFromFs)
   } catch (error) {
     if (isAbsentSkillPathError(error)) return []
     throw error
   }
 }
 
-async function fsListDir(fs: FileSystem, path: string): Promise<FsDirEntry[]> {
+async function fsListDir(fs: FileSystem, path: string, sandboxPolicy: FsReadPolicy): Promise<FsDirEntry[]> {
   const target = await fs.resolve(path)
-  return await fs.listDir(target)
+  return await fs.listDir(target, undefined, sandboxPolicy)
 }
 
 function entryFromFs(entry: FsDirEntry): SkillRootEntry {
@@ -790,8 +794,14 @@ async function listSkillRootEntriesFromNode(root: SkillRoot, ctx: Context): Prom
   return result
 }
 
-async function parseSkillFile(path: string, ctx: Context, signal?: AbortSignal, trustedHost = false): Promise<ParsedSkill | undefined> {
-  const raw = await readSkillText(ctx, path, signal, trustedHost)
+async function parseSkillFile(
+  path: string,
+  ctx: Context,
+  signal?: AbortSignal,
+  trustedHost = false,
+  sandboxPolicy?: FsReadPolicy,
+): Promise<ParsedSkill | undefined> {
+  const raw = await readSkillText(ctx, path, signal, trustedHost, sandboxPolicy)
   signal?.throwIfAborted()
   if (raw === undefined) {
     return undefined
@@ -838,11 +848,21 @@ function optionalFileSystem(ctx: Context): FileSystem | undefined {
   return ctx.get('fs')
 }
 
-async function readSkillText(ctx: Context, path: string, signal?: AbortSignal, trustedHost = false): Promise<string | undefined> {
+function readPolicy(cwd?: string): FsReadPolicy {
+  return { mode: 'workspace-write', workspaceRoot: resolve(cwd ?? process.cwd()) }
+}
+
+async function readSkillText(
+  ctx: Context,
+  path: string,
+  signal?: AbortSignal,
+  trustedHost = false,
+  sandboxPolicy?: FsReadPolicy,
+): Promise<string | undefined> {
   signal?.throwIfAborted()
   const fs = optionalFileSystem(ctx)
   if (fs !== undefined && !trustedHost) {
-    return await readSkillTextFromFileSystem(ctx, fs, path, signal)
+    return await readSkillTextFromFileSystem(ctx, fs, path, signal, sandboxPolicy ?? readPolicy())
   }
   try {
     return await readFile(path, { encoding: 'utf8', signal })
@@ -853,7 +873,13 @@ async function readSkillText(ctx: Context, path: string, signal?: AbortSignal, t
   }
 }
 
-async function readSkillTextFromFileSystem(ctx: Context, fs: FileSystem, path: string, signal?: AbortSignal): Promise<string | undefined> {
+async function readSkillTextFromFileSystem(
+  ctx: Context,
+  fs: FileSystem,
+  path: string,
+  signal?: AbortSignal,
+  sandboxPolicy?: FsReadPolicy,
+): Promise<string | undefined> {
   // A missing or temporarily inaccessible skill file is not fatal to discovery.
   signal?.throwIfAborted()
   let target
@@ -866,7 +892,7 @@ async function readSkillTextFromFileSystem(ctx: Context, fs: FileSystem, path: s
   signal?.throwIfAborted()
   let info
   try {
-    info = await fs.stat(target, signal)
+    info = await fs.stat(target, signal, sandboxPolicy)
   } catch (error) {
     signal?.throwIfAborted()
     if (isAbsentSkillPathError(error)) return undefined
@@ -874,7 +900,7 @@ async function readSkillTextFromFileSystem(ctx: Context, fs: FileSystem, path: s
   }
   if (info === undefined || info.type !== 'file') return undefined
   try {
-    return await fs.readText(target, signal)
+    return await fs.readText(target, signal, sandboxPolicy)
   } catch (error) {
     signal?.throwIfAborted()
     if (isAbsentSkillPathError(error)) return undefined

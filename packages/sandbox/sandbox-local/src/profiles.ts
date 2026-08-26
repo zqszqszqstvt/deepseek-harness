@@ -13,8 +13,20 @@ import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
  * @param policy - file-effect policy to express as bwrap mounts.
  * @returns profile arguments before the trailing separator and command argv.
  */
-export function bwrapProfileArgs(policy: SandboxPolicy): string[] {
-  const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']
+export function bwrapProfileArgs(policy: SandboxPolicy, strictFilesystem = false): string[] {
+  const args = strictFilesystem
+    ? [
+      '--ro-bind', '/usr', '/usr',
+      '--ro-bind', '/bin', '/bin',
+      '--ro-bind', '/sbin', '/sbin',
+      '--ro-bind', '/lib', '/lib',
+      '--ro-bind', '/lib64', '/lib64',
+      '--ro-bind', '/etc', '/etc',
+      '--ro-bind', '/run', '/run',
+      '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent',
+      '--ro-bind', policy.workspaceRoot, policy.workspaceRoot,
+    ]
+    : ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']
   if (policy.mode === 'workspace-write') {
     args.push('--tmpfs', '/tmp')
     args.push('--bind', policy.workspaceRoot, policy.workspaceRoot)

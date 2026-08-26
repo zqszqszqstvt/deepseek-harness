@@ -1,0 +1,55 @@
+- insert:
+    - id: storage
+      name: '@deepseek-ai/dsh-storage'
+
+    - id: storage-json
+      name: '@deepseek-ai/dsh-storage-json'
+      config:
+        root: !!js dshHomePath('server-storage')
+
+    - id: storage-domain
+      name: '@deepseek-ai/dsh-storage-domain'
+      config:
+        backend: json
+
+    - id: directory-picker
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
+    - id: server-startup
+      name: '@deepseek-ai/dsh-server/startup'
+
+    - id: api-gateway
+      name: '@deepseek-ai/dsh-host-apiproxy'
+      config:
+        nativeOpen: false
+
+    - id: webserver
+      name: '@deepseek-ai/dsh-host-webserver'
+      inject: [serverStartup]
+      config:
+        host: !!js ctx.serverStartup.host ?? '127.0.0.1'
+        port: !!js ctx.serverStartup.port ?? 3080
+
+    - id: server-runtime
+      name: '@deepseek-ai/dsh-server'
+      inject: [serverStartup]
+      config:
+        host: !!js ctx.serverStartup.host ?? '127.0.0.1'
+        port: !!js ctx.serverStartup.port ?? 3080
+        dataDir: !!js ctx.serverStartup.dataDir
+        maxConcurrentTurns: !!js ctx.serverStartup.maxConcurrentTurns
+
+- id: session-persistence-jsonl
+  config:
+    root: !!js ctx.serverStartup.sessionsDir
+
+- id: sandbox
+  config:
+    strictFilesystem: true
+
+- id: fs-sandbox
+  config:
+    strictReads: true

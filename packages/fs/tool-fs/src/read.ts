@@ -8,6 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { GenericCallView, ReadResultView, ToolResult } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
+import type { FsSandboxController } from './sandbox.ts'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { buildWindow, formatReadOutput, langFromPath, readMetaFromMeta } from './read-render.ts'
 import { resolveRegularReadTarget } from './read-target.ts'
@@ -66,7 +67,7 @@ export function parseReadArgs(args: { file_path: string; offset?: number; limit?
  * @param ctx - the plugin context; registrations are effects scoped to it, and execution uses its `fs` service.
  * @param caps - the deployment's resolved read caps (plugin config after defaulting).
  */
-export function applyReadTool(ctx: Context, caps: ReadToolCaps): void {
+export function applyReadTool(ctx: Context, caps: ReadToolCaps, sandbox?: FsSandboxController): void {
   ctx.systemPrompt.section({
     name: 'tool:read',
     order: 100,
@@ -135,15 +136,16 @@ export function applyReadTool(ctx: Context, caps: ReadToolCaps): void {
     isConcurrencySafe: () => true,
     async execute(args, exec) {
       const input = parseReadArgs(args, caps.limit)
+      const sandboxPolicy = sandbox?.standingPolicy(exec)
       // One stat: absence observation OR type check + size routing + present version.
       // A concurrent write can only make a later guarded mutation fail stale and require reread.
-      const { target, info } = await resolveRegularReadTarget(ctx, exec, input.filePath)
+      const { target, info } = await resolveRegularReadTarget(ctx, exec, input.filePath, sandboxPolicy)
 
       // Stream when the file is large OR size is unknown, so a size-less backend
       // never buffers an arbitrarily large file.
       const chunks = info.size === undefined || info.size >= caps.streamMinSize
-        ? await ctx.fs.streamText(target, exec.signal)
-        : [await ctx.fs.readText(target, exec.signal)]
+        ? await ctx.fs.streamText(target, exec.signal, sandboxPolicy)
+        : [await ctx.fs.readText(target, exec.signal, sandboxPolicy)]
       const window = await buildWindow(
         chunks,
         { offset: input.offset, limit: input.limit, maxLineLength: caps.maxLineLength, maxBytes: caps.maxBytes },

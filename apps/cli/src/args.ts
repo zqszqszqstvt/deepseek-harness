@@ -64,6 +64,7 @@ const collect = (value: string, previous: string[] = []): string[] => [...previo
 const HELP_EXAMPLES = `
 Examples:
   dsh --profile web                          boot the web profile (same as: dsh web)
+  dsh server                                 boot the multi-user server profile
   dsh --profile headless "run the tests"     answer one task, print the result, and exit
   dsh --profile tui --patch ./extra.yml      boot a custom profile with one extra overlay
   dsh --profile tui --resume <session>       arguments after the launcher flags reach the app
@@ -166,6 +167,21 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
     .action((args: string[], options: BootOptions) => {
       rejectParentOptions('web')
       resolved = resolveBoot(web, 'web', options, args)
+    })
+
+  const server = program.command('server').description('boot the multi-user server profile; the server app\'s own flags follow')
+  server
+    .helpOption(false)
+    .allowUnknownOption()
+    .passThroughOptions()
+    .enablePositionalOptions()
+    .argument('[args...]', 'arguments for the server app (see: dsh server --help)')
+    .option('--patch <path>', 'extra patch-list overlay applied after the profile layer (repeatable)', collect)
+    .option('--dump-config', 'print the composed server-profile tree (with the user layer and any --patch) and exit')
+    .option('--dump-default-config', 'print the server profile\'s bundle layers (no user layer) and exit')
+    .action((args: string[], options: BootOptions) => {
+      rejectParentOptions('server')
+      resolved = resolveBoot(server, 'server', options, args)
     })
 
   const plugin = program.command('plugin').description('manage a profile\'s plugins by forwarding the remaining arguments to pnpm in the profile directory')

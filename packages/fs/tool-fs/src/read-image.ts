@@ -17,6 +17,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { GenericCallView, ToolExecution } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
 import { resolveRegularReadTarget } from './read-target.ts'
+import type { FsSandboxController } from './sandbox.ts'
 
 /** Extensions `read_image` accepts; magic-byte validation at the attachment service stays authoritative. */
 const IMAGE_EXTENSIONS: Readonly<Record<string, ImageMediaType>> = {
@@ -166,7 +167,7 @@ function imageReadContent(value: ImageReadValue): ContentBlock[] {
  * @param ctx - the registration scope; execution uses its `fs` service plus
  *   the optional `attachments`/`llm` services.
  */
-export function applyReadImageTool(ctx: Context): void {
+export function applyReadImageTool(ctx: Context, sandbox?: FsSandboxController): void {
   ctx.tools.register(defineTool({
     name: 'read_image',
     description: 'Read a PNG/JPEG/WebP/GIF file and return the image itself. '
@@ -207,12 +208,13 @@ export function applyReadImageTool(ctx: Context): void {
       }
       await assertImageCapableRoute(ctx, exec, args.file_path)
 
-      const { target, info } = await resolveRegularReadTarget(ctx, exec, args.file_path)
+      const sandboxPolicy = sandbox?.standingPolicy(exec)
+      const { target, info } = await resolveRegularReadTarget(ctx, exec, args.file_path, sandboxPolicy)
 
       // The tool result is one message carrying one image, so the per-message
       // aggregate bound applies beside the per-image bound.
       const byteCap = Math.min(attachments.imageLimits.maxImageBytes, attachments.imageLimits.maxMessageImageBytes)
-      const data = await ctx.fs.readBytes(target, exec.signal, byteCap)
+      const data = await ctx.fs.readBytes(target, exec.signal, byteCap, sandboxPolicy)
       // Persist before returning: the image block must reference a durably
       // committed object by the time the tool/result event is appended.
       let ref: ImageAttachmentRef

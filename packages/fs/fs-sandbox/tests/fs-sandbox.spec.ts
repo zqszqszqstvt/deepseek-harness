@@ -27,10 +27,10 @@ let ctx: Context
 let fs: SandboxedFileSystem
 let fiber: Awaited<ReturnType<Context['plugin']>>
 
-async function boot(mode: SandboxMode): Promise<void> {
+async function boot(mode: SandboxMode, strictReads = false): Promise<void> {
   ctx = new Context()
   await ctx.plugin(SandboxPolicyService, { mode, workspaceRoot: workspace })
-  fiber = await ctx.plugin(SandboxedFileSystem, { cwd: workspace })
+  fiber = await ctx.plugin(SandboxedFileSystem, { cwd: workspace, strictReads })
   fs = ctx.fs as SandboxedFileSystem
 }
 
@@ -191,6 +191,28 @@ describe('danger-full-access', () => {
     const path = join(outside, 'free.txt')
     await fs.writeText(await target(path), 'free')
     expect(await readFile(path, 'utf8')).toBe('free')
+  })
+})
+
+describe('strict in-process reads', () => {
+  beforeEach(() => boot('workspace-write', true))
+
+  it('denies stat and text reads outside the session workspace', async () => {
+    const inside = join(workspace, 'inside.txt')
+    const outsideFile = join(outside, 'outside.txt')
+    await writeFile(inside, 'inside')
+    await writeFile(outsideFile, 'outside')
+    const outsideTarget = await target(outsideFile)
+    await expect(fs.stat(outsideTarget)).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.readText(outsideTarget)).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await fs.readText(await target(inside))).toBe('inside')
+  })
+
+  it('denies a symlink that resolves outside the workspace', async () => {
+    await writeFile(join(outside, 'secret.txt'), 'secret')
+    await symlink(join(outside, 'secret.txt'), join(workspace, 'secret-link.txt'))
+    await expect(fs.readText(await target(join(workspace, 'secret-link.txt'))))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
   })
 })
 
