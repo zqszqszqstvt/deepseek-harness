@@ -36,6 +36,9 @@
       "path": "../../jobs/jobs"
     },
     {
+      "path": "../../sandbox/sandbox-policy"
+    },
+    {
       "path": "../../runtime-diagnostics/invariants"
     }
   ]

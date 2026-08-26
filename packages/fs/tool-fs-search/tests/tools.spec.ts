@@ -379,6 +379,14 @@ describe('command construction (plain argv)', () => {
 })
 
 describe('workdir derivation and signal forwarding', () => {
+  it('rejects an explicit search root outside the session workspace before spawning ripgrep', async () => {
+    const { ctx, subprocess } = await setup()
+    const result = await call(ctx, 'glob', { pattern: '*', path: join('/sessions/s1', '..', 'outside') }, { agent: agent('/sessions/s1') })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('outside the session workspace')
+    expect(subprocess.spawns).toHaveLength(0)
+  })
+
   it('forwards the session cwd as the spawn cwd', async () => {
     const { ctx, subprocess } = await setup()
     subprocess.handler = () => runResult('a.ts\n')

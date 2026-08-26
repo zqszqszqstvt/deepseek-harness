@@ -8004,6 +8004,10 @@ importers:
         version: link:../terminal
 
   packages/terminal/tool-terminal:
+    peerDependencies:
+      '@deepseek-ai/dsh-sandbox-policy':
+        specifier: workspace:^
+        version: link:../../sandbox/sandbox-policy
     dependencies:
       '@deepseek-ai/schemastery':
         specifier: link:../../../vendor/schemastery

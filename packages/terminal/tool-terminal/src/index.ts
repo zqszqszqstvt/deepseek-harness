@@ -10,6 +10,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { TerminalSessionId } from '@deepseek-ai/dsh-terminal'
 import type { TerminalSendResult, TerminalSessionId as TerminalSessionIdType, TerminalSignal } from '@deepseek-ai/dsh-terminal'
+import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-jobs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -181,10 +182,18 @@ export function apply(ctx: Context, config: Config = {}): void {
     },
     async execute(args: SpawnArgs, exec) {
       if (args.type.length === 0) throw new Error('type must be a non-empty string')
-      const result = await ctx.terminals.spawn(requireAgent(exec.agent), {
+      const owner = requireAgent(exec.agent)
+      const policy = ctx.get('sandboxPolicy')?.resolve({ session: owner.session })
+      // A confined PTY must start inside its policy root. Passing a host cwd
+      // outside the root would leave the child with an inherited directory
+      // handle that mount-based confinement cannot reliably revoke.
+      const cwd = policy !== undefined && policy.mode !== 'danger-full-access'
+        ? policy.workspaceRoot
+        : args.cwd
+      const result = await ctx.terminals.spawn(owner, {
         type: args.type,
         ...args.name !== undefined ? { name: args.name } : {},
-        ...args.cwd !== undefined ? { cwd: args.cwd } : {},
+        ...cwd !== undefined ? { cwd } : {},
       }, exec.signal)
       return result
     },

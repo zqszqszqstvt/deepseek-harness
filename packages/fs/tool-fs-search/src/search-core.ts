@@ -20,7 +20,8 @@
  */
 
 import { existsSync } from 'node:fs'
-import { isAbsolute, relative, sep } from 'node:path'
+import { realpath } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 import { ItemRetainer, TextRetainer } from '@deepseek-ai/dsh-output-retention'
@@ -80,6 +81,52 @@ export type SearchErrorCode =
   | 'SEARCH_FAILED'
   | 'SEARCH_RAW_OUTPUT_OVERFLOW'
   | 'SEARCH_ABORTED'
+
+function isMissingPath(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && ((error as { code?: unknown }).code === 'ENOENT' || (error as { code?: unknown }).code === 'ENOTDIR')
+}
+
+/** Resolve an existing path, or the deepest existing ancestor plus its missing suffix. */
+async function canonicalSearchPath(path: string): Promise<string> {
+  try {
+    return await realpath(path)
+  } catch (error: unknown) {
+    if (!isMissingPath(error)) throw error
+  }
+  const missing: string[] = [basename(path)]
+  let ancestor = dirname(path)
+  while (true) {
+    try {
+      return join(await realpath(ancestor), ...missing)
+    } catch (error: unknown) {
+      if (!isMissingPath(error)) throw error
+      const parent = dirname(ancestor)
+      if (parent === ancestor) return path
+      missing.unshift(basename(ancestor))
+      ancestor = parent
+    }
+  }
+}
+
+function pathUnder(path: string, root: string): boolean {
+  const rest = relative(root, path)
+  return rest === '' || (rest !== '..' && !rest.startsWith(`..${sep}`) && !isAbsolute(rest))
+}
+
+async function assertSearchRoot(workdir: string, argv: readonly string[]): Promise<void> {
+  const separator = argv.indexOf('--')
+  if (separator < 0 || separator + 1 >= argv.length) return
+  const requested = argv[separator + 1] as string
+  const root = await canonicalSearchPath(resolve(workdir))
+  const target = await canonicalSearchPath(resolve(workdir, requested))
+  if (!pathUnder(target, root)) {
+    throw new SearchError(
+      `search path ${JSON.stringify(requested)} is outside the session workspace`,
+      'SEARCH_FAILED',
+    )
+  }
+}
 
 /**
  * Typed search failure. Extends {@link HarnessError} so it carries a stable
@@ -226,10 +273,12 @@ export async function runRipgrep(
   }
   const cwd = exec.agent?.session.header.cwd
   const workdir = cwd ?? process.cwd()
+  await assertSearchRoot(workdir, argv)
   let handle: SubprocessHandle
   try {
+    const rawArgv = [await resolveRgPath(), '--no-config', ...argv]
     handle = ctx.subprocess.spawn({
-      argv: [await resolveRgPath(), '--no-config', ...argv],
+      argv: rawArgv,
       cwd: workdir,
       stdio: {
         stdin: 'ignore',

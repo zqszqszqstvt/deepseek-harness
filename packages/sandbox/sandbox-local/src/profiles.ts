@@ -16,6 +16,9 @@ import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 export function bwrapProfileArgs(policy: SandboxPolicy, strictFilesystem = false): string[] {
   const args = strictFilesystem
     ? [
+      // Start from an empty mount root. Otherwise paths not covered by the
+      // selected binds may remain backed by the host root in the namespace.
+      '--tmpfs', '/',
       '--ro-bind', '/usr', '/usr',
       '--ro-bind', '/bin', '/bin',
       '--ro-bind', '/sbin', '/sbin',

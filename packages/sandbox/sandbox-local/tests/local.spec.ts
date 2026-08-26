@@ -62,6 +62,22 @@ function fakeSeatbeltExec(status: number): string {
 const SEATBELT_RO_PROFILE = '(version 1) (allow default) (deny file-write*) (allow file-write* (literal "/dev/null"))'
 
 describe('profile dialects', () => {
+  it('strict bwrap starts from an empty root and binds only runtime paths plus the workspace', () => {
+    expect(bwrapProfileArgs(WW, true)).toEqual([
+      '--tmpfs', '/',
+      '--ro-bind', '/usr', '/usr',
+      '--ro-bind', '/bin', '/bin',
+      '--ro-bind', '/sbin', '/sbin',
+      '--ro-bind', '/lib', '/lib',
+      '--ro-bind', '/lib64', '/lib64',
+      '--ro-bind', '/etc', '/etc',
+      '--ro-bind', '/run', '/run',
+      '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent',
+      '--ro-bind', '/ws', '/ws',
+      '--tmpfs', '/tmp', '--bind', '/ws', '/ws',
+    ])
+  })
+
   it('bwrap read-only: whole tree read-only with fresh /dev and private PID-scoped /proc, no writable mounts', () => {
     expect(bwrapProfileArgs(RO)).toEqual(['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent'])
   })
