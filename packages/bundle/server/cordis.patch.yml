@@ -43,9 +43,11 @@
         maxConcurrentTurns: !!js ctx.serverStartup.maxConcurrentTurns
 
 - id: session-persistence-jsonl
-  inject: [serverStartup]
-  config:
-    root: !!js ctx.serverStartup.sessionsDir
+  disabled: true
+
+- insert:
+    - id: server-session-persistence-jsonl
+      name: '@deepseek-ai/dsh-server/session-persistence'
 
 - id: sandbox
   config:

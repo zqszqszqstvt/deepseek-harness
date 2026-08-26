@@ -8,6 +8,8 @@
     { "path": "../../boot/app-boot" },
     { "path": "../../boot/cmdline" },
     { "path": "../../host/apiproxy" },
-    { "path": "../../host/webserver" }
+    { "path": "../../host/webserver" },
+    { "path": "../../runtime-diagnostics/invariants" },
+    { "path": "../../session/session-persistence-jsonl" }
   ]
 }
