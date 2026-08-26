@@ -192,9 +192,6 @@ importers:
       '@deepseek-ai/dsh-home-paths':
         specifier: workspace:^
         version: link:../../packages/util/home-paths
-      '@deepseek-ai/dsh-server':
-        specifier: workspace:^
-        version: link:../../packages/bundle/server
       '@deepseek-ai/dsh-jobs-local':
         specifier: workspace:^
         version: link:../../packages/jobs/jobs-local
@@ -219,6 +216,9 @@ importers:
       '@deepseek-ai/dsh-schedule':
         specifier: workspace:^
         version: link:../../packages/schedule/schedule
+      '@deepseek-ai/dsh-server':
+        specifier: workspace:^
+        version: link:../../packages/bundle/server
       '@deepseek-ai/dsh-session-projection':
         specifier: workspace:^
         version: link:../../packages/session/session-projection
@@ -1284,6 +1284,9 @@ importers:
       '@deepseek-ai/dsh-cmdline':
         specifier: workspace:^
         version: link:../../boot/cmdline
+      '@deepseek-ai/dsh-home-paths':
+        specifier: workspace:^
+        version: link:../../util/home-paths
       '@deepseek-ai/dsh-host-apiproxy':
         specifier: workspace:^
         version: link:../../host/apiproxy
@@ -1296,9 +1299,6 @@ importers:
       '@deepseek-ai/dsh-host-webserver':
         specifier: workspace:^
         version: link:../../host/webserver
-      '@deepseek-ai/dsh-home-paths':
-        specifier: workspace:^
-        version: link:../../util/home-paths
       '@deepseek-ai/dsh-session':
         specifier: workspace:^
         version: link:../../core/session
@@ -4549,7 +4549,7 @@ importers:
   packages/fs/fs-sandbox:
     dependencies:
       '@deepseek-ai/schemastery':
-        specifier: workspace:^
+        specifier: link:../../../vendor/schemastery
         version: link:../../../vendor/schemastery
     devDependencies:
       '@deepseek-ai/cordis':

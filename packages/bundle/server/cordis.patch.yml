@@ -43,6 +43,7 @@
         maxConcurrentTurns: !!js ctx.serverStartup.maxConcurrentTurns
 
 - id: session-persistence-jsonl
+  inject: [serverStartup]
   config:
     root: !!js ctx.serverStartup.sessionsDir
 
