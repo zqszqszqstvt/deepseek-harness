@@ -93,10 +93,15 @@ async function eventsFor(api: ApiProxy, sessionId: string, req: IncomingMessage,
   }
 }
 
+/** Multi-user HTTP Server runtime config resolved by the startup plugin and Loader. */
 export interface Config {
+  /** HTTP bind address supplied by the shared Server startup parser. */
   host: '127.0.0.1' | '0.0.0.0'
+  /** HTTP listen port supplied by the shared Server startup parser. */
   port: number
+  /** Root for per-user workspaces and Server-owned session data. */
   dataDir?: string
+  /** Maximum user turns executing concurrently before later requests queue. */
   maxConcurrentTurns: number
 }
 

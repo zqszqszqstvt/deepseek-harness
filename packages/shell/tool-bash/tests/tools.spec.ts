@@ -181,14 +181,21 @@ class CountingStartExecutor extends ShellExecutor {
   }
 }
 
-async function setupSandboxed(withApproval = false) {
+async function setupSandboxed(
+  withApproval = false,
+  policyConfig: {
+    mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+    maximumMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+    escalationTargets?: Array<'workspace-write' | 'danger-full-access'>
+  } = {},
+) {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(LocalJobRegistry)
   await ctx.plugin(ToolTasks)
-  await ctx.plugin(SandboxPolicyService, {})
+  await ctx.plugin(SandboxPolicyService, policyConfig)
   await ctx.plugin(RecordingSandboxExecutor)
   if (withApproval) await ctx.plugin(ApprovalService)
   await ctx.plugin(BashEnvPlugin)
@@ -606,6 +613,30 @@ describe('sandbox escalation through the generic task producer', () => {
     ]) {
       expect((await call(ctx, 'bash', args)).isError).toBe(true)
     }
+  })
+
+  it('omits and rejects escalation when deployment policy disables it', async () => {
+    const { ctx, bash } = await setupSandboxed(true, {
+      mode: 'workspace-write',
+      maximumMode: 'workspace-write',
+      escalationTargets: [],
+    })
+    const schema = ctx.tools.schemas().find(item => item.name === 'bash')!
+    expect(schema.description).not.toContain('approval prompt')
+    expect(schema.parameters.properties).not.toHaveProperty('sandbox_permissions')
+    expect(schema.parameters.properties).not.toHaveProperty('justification')
+    const prompted = vi.fn()
+    ctx.on('approval/request', () => { prompted(); return Promise.resolve<ApprovalOutcome>('allowed-once') })
+
+    const result = await call(ctx, 'bash', {
+      command: 'true',
+      description: 'forge disabled escalation',
+      sandbox_permissions: 'danger-full-access',
+      justification: 'escape the deployment boundary',
+    }, sandboxAgent())
+    expect(text(result)).toContain('sandbox escalation is disabled by deployment policy')
+    expect(prompted).not.toHaveBeenCalled()
+    expect(bash.modes).toEqual([])
   })
 
   it('rejects injected escalation without a sandbox and non-widening escalation without prompting', async () => {

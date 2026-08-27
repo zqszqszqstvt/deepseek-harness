@@ -22,7 +22,7 @@ import { resolve as resolvePath } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent'
-import { canonicalPath, type SandboxExecutionPolicy, type SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import { ESCALATION_TARGETS, canonicalPath, type SandboxExecutionPolicy, type SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { effectiveSandboxMode } from './session-mode.ts'
@@ -32,6 +32,12 @@ export { SANDBOX_MODES, effectiveSandboxMode, setSandboxMode } from './session-m
 /** Resolve filesystem identity before lexical normalization can erase symlink-sensitive components. */
 function resolveWorkspaceRoot(path: string): string {
   return resolvePath(canonicalPath(path))
+}
+
+const MODE_RANK: Record<SandboxMode, number> = {
+  'read-only': 0,
+  'workspace-write': 1,
+  'danger-full-access': 2,
 }
 
 /** Render the policy without claiming which capabilities are mounted. */
@@ -67,6 +73,10 @@ declare module '@deepseek-ai/cordis' {
 export interface Config {
   /** File-sandbox mode a session starts from (default: `read-only`). */
   mode?: SandboxMode
+  /** Highest file-sandbox mode this deployment may resolve (default: `danger-full-access`). */
+  maximumMode?: SandboxMode
+  /** Modes model-facing tools may request through one-shot approval. */
+  escalationTargets?: Array<Exclude<SandboxMode, 'read-only'>>
   /**
    * Fallback root for agentless calls and sessions without a cwd (default:
    * `process.cwd()`). Normal agent calls use their session cwd instead.
@@ -92,6 +102,9 @@ export class SandboxPolicyService extends Service {
   // Inline schema call: the config catalog walks `static Config` statically.
   static Config: z<Config> = z.object({
     mode: z.union(['read-only', 'workspace-write', 'danger-full-access'] as const).default('read-only'),
+    maximumMode: z.union(['read-only', 'workspace-write', 'danger-full-access'] as const).default('danger-full-access'),
+    escalationTargets: z.array(z.union(['workspace-write', 'danger-full-access'] as const))
+      .default([...ESCALATION_TARGETS] as Array<Exclude<SandboxMode, 'read-only'>>),
     // No schema default: process.cwd() is resolved in the constructor so the
     // stored root is always absolute regardless of how it was supplied.
     workspaceRoot: z.string(),
@@ -99,6 +112,10 @@ export class SandboxPolicyService extends Service {
 
   /** The deployment default mode — the fallback beneath a session override. */
   readonly defaultMode: SandboxMode
+  /** Highest mode any default, session override, or explicit call override may resolve. */
+  readonly maximumMode: SandboxMode
+  /** Deployment-approved targets model-facing tools may advertise and request. */
+  readonly escalationTargets: readonly Exclude<SandboxMode, 'read-only'>[]
   /** The absolute `workspace-write` fallback root for calls without a session cwd. */
   readonly workspaceRoot: string
   constructor(ctx: Context, config: Config) {
@@ -107,6 +124,19 @@ export class SandboxPolicyService extends Service {
     // runtime fact. `workspaceRoot` has NO schema default, so its fallback to
     // the process cwd is real branching, resolved absolute either way.
     this.defaultMode = config.mode as SandboxMode
+    this.maximumMode = config.maximumMode as SandboxMode
+    if (MODE_RANK[this.defaultMode] > MODE_RANK[this.maximumMode]) {
+      throw new Error(`sandbox-policy: default mode "${this.defaultMode}" exceeds maximumMode "${this.maximumMode}"`)
+    }
+    const targets = config.escalationTargets as Array<Exclude<SandboxMode, 'read-only'>>
+    if (new Set(targets).size !== targets.length) {
+      throw new Error('sandbox-policy: escalationTargets must not contain duplicates')
+    }
+    const forbiddenTarget = targets.find(mode => MODE_RANK[mode] > MODE_RANK[this.maximumMode])
+    if (forbiddenTarget !== undefined) {
+      throw new Error(`sandbox-policy: escalation target "${forbiddenTarget}" exceeds maximumMode "${this.maximumMode}"`)
+    }
+    this.escalationTargets = Object.freeze([...targets])
     this.workspaceRoot = resolveWorkspaceRoot(config.workspaceRoot ?? process.cwd())
 
     ctx.inject(['systemPrompt'], (scope: Context) => {
@@ -124,18 +154,19 @@ export class SandboxPolicyService extends Service {
   }
 
   /**
-   * Resolve the complete policy for one capability call. An approved explicit
-   * mode outranks the session's last `sandbox/mode` event, which outranks the
-   * deployment default. A session cwd is its workspace-write boundary; the
-   * configured root is the fallback for agentless calls and sessions without a
-   * cwd.
+   * Resolve the complete policy for one capability call. An explicit mode
+   * outranks the session's last `sandbox/mode` event, which outranks the
+   * deployment default; `maximumMode` caps every source. A session cwd is its
+   * workspace-write boundary; the configured root is the fallback for
+   * agentless calls and sessions without a cwd.
    * @param request - optional session and approved mode override.
    * @returns the fully resolved per-call mode and absolute workspace root.
    */
   resolve(request: SandboxPolicyRequest = {}): SandboxExecutionPolicy {
     const { session } = request
+    const requestedMode = request.mode ?? (session === undefined ? undefined : this.overrideOf(session)) ?? this.defaultMode
     return {
-      mode: request.mode ?? (session === undefined ? undefined : this.overrideOf(session)) ?? this.defaultMode,
+      mode: MODE_RANK[requestedMode] <= MODE_RANK[this.maximumMode] ? requestedMode : this.maximumMode,
       workspaceRoot: resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot),
       ...session === undefined ? {} : { sessionId: session.id },
     }

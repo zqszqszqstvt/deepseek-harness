@@ -49,6 +49,25 @@
     - id: server-session-persistence-jsonl
       name: '@deepseek-ai/dsh-server/session-persistence'
 
+# A Server user can approve other request types, but no approval or persisted
+# session mode may widen filesystem access beyond that user's workspace.
+- id: sandbox-policy
+  config:
+    mode: workspace-write
+    maximumMode: workspace-write
+    escalationTargets: []
+    workspaceRoot: !!js process.cwd()
+
+- id: permission
+  config:
+    defaultPreset: workspace-write
+    presets:
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+        name: workspace-write
+        description: Write only inside the session workspace and permitted temporary directories.
+
 - id: sandbox
   config:
     strictFilesystem: true

@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readlinkSync, rmSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -148,6 +148,21 @@ describe.skipIf(!bwrapUsable)('sandbox-local: real bwrap confinement', () => {
 })
 
 describe.skipIf(!strictBwrapUsable)('sandbox-local: strict bwrap filesystem boundary', () => {
+  it('does not expose host user content outside the workspace', async () => {
+    const workdir = await tempDir(homedir())
+    const outside = await tempDir(homedir())
+    const secret = join(outside, 'secret.txt')
+    await writeFile(secret, 'outside-secret')
+    const sandbox = await provider({ strictFilesystem: true })
+    const { result } = runConfined(
+      sandbox,
+      `cat ${secret}`,
+      { mode: 'workspace-write', workspaceRoot: workdir },
+    )
+    expect(result.status).not.toBe(0)
+    expect(result.stdout).not.toContain('outside-secret')
+  })
+
   it('rejects an outside mkdir-and-write during execution instead of creating an ephemeral file', async () => {
     const workdir = await tempDir(homedir())
     const outside = await tempDir(homedir())

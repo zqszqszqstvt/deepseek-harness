@@ -14,7 +14,14 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SandboxPolicyService, { SANDBOX_MODES, effectiveSandboxMode, setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import SystemPrompt, { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 
-async function mounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}) {
+interface PolicyTestConfig {
+  mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  maximumMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  escalationTargets?: Array<'workspace-write' | 'danger-full-access'>
+  workspaceRoot?: string
+}
+
+async function mounted(config: PolicyTestConfig = {}) {
   const ctx = new Context()
   await ctx.plugin(SandboxPolicyService, config)
   return ctx
@@ -43,6 +50,8 @@ describe('SandboxPolicyService', () => {
   it('defaults to read-only under the process cwd', async () => {
     const ctx = await mounted()
     expect(ctx.sandboxPolicy.defaultMode).toBe('read-only')
+    expect(ctx.sandboxPolicy.maximumMode).toBe('danger-full-access')
+    expect(ctx.sandboxPolicy.escalationTargets).toEqual(['workspace-write', 'danger-full-access'])
     expect(ctx.sandboxPolicy.workspaceRoot).toBe(resolve(process.cwd()))
   })
 
@@ -118,6 +127,22 @@ describe('SandboxPolicyService', () => {
     })
   })
 
+  it('caps session and explicit overrides at the deployment maximum', async () => {
+    const ctx = await mounted({
+      mode: 'workspace-write',
+      maximumMode: 'workspace-write',
+      escalationTargets: [],
+      workspaceRoot: '/fallback',
+    })
+    const active = session('sess-capped', '/projects/capped')
+    setSandboxMode(active, 'danger-full-access')
+
+    expect(ctx.sandboxPolicy.maximumMode).toBe('workspace-write')
+    expect(ctx.sandboxPolicy.escalationTargets).toEqual([])
+    expect(ctx.sandboxPolicy.resolve({ session: active }).mode).toBe('workspace-write')
+    expect(ctx.sandboxPolicy.resolve({ session: active, mode: 'danger-full-access' }).mode).toBe('workspace-write')
+  })
+
   it('uses the configured root when a session has no cwd', async () => {
     const ctx = await mounted({ workspaceRoot: '/fallback' })
     expect(ctx.sandboxPolicy.resolve({ session: session('sess-no-cwd') }).workspaceRoot).toBe(resolve('/fallback'))
@@ -127,6 +152,15 @@ describe('SandboxPolicyService', () => {
     const ctx = new Context()
     // schemastery rejects the union violation when the plugin loads.
     await expect(ctx.plugin(SandboxPolicyService, { mode: 'yolo' as never })).rejects.toThrow()
+  })
+
+  it('rejects internally inconsistent deployment bounds at load', async () => {
+    await expect(mounted({ mode: 'danger-full-access', maximumMode: 'workspace-write', escalationTargets: [] }))
+      .rejects.toThrow(/default mode .* exceeds maximumMode/)
+    await expect(mounted({ maximumMode: 'workspace-write', escalationTargets: ['danger-full-access'] }))
+      .rejects.toThrow(/escalation target .* exceeds maximumMode/)
+    await expect(mounted({ escalationTargets: ['workspace-write', 'workspace-write'] }))
+      .rejects.toThrow(/must not contain duplicates/)
   })
 
   it('disposes the service and context contribution from a child fiber (HMR safety)', async () => {
@@ -142,7 +176,7 @@ describe('SandboxPolicyService', () => {
 })
 
 describe('sandbox:policy request context', () => {
-  async function promptMounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}): Promise<Context> {
+  async function promptMounted(config: PolicyTestConfig = {}): Promise<Context> {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(SandboxPolicyService, config)

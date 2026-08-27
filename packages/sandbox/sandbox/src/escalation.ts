@@ -132,6 +132,8 @@ export interface EscalationApproval<A = object, C = string> {
 export interface EscalationRequest {
   /** The requested target mode (schema-pinned to {@link ESCALATION_TARGETS} when advertised). */
   requestedMode: string
+  /** Deployment-approved targets; a mode absent here never reaches the approval channel. */
+  allowedModes: readonly Exclude<SandboxMode, 'read-only'>[]
   /** The model's one-sentence reason, shown verbatim to the user inside the audit reason. */
   justification: string
   /** The call's effective mode (session override ?? composition default) the request must strictly widen. */
@@ -155,7 +157,10 @@ export interface EscalationRequest {
  * @returns the granted mode, consumed by the one call that asked.
  */
 export async function approveEscalation<A, C>(request: EscalationRequest, approval: EscalationApproval<A, C>): Promise<SandboxMode> {
-  const { requestedMode: mode, effectiveMode, justification, subject } = request
+  const { requestedMode: mode, allowedModes, effectiveMode, justification, subject } = request
+  if (!allowedModes.includes(mode as Exclude<SandboxMode, 'read-only'>)) {
+    throw new Error(`sandbox escalation to "${mode}" is disabled by deployment policy`)
+  }
   // Strict widening is an EXECUTION check against the call's effective mode —
   // deliberately not a schema constraint (the enum is the closed target
   // vocabulary; the effective mode is per-call truth).

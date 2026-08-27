@@ -5,7 +5,8 @@
  * sequence to `@deepseek-ai/dsh-sandbox` (the same pieces `@deepseek-ai/dsh-tool-bash`
  * uses), so bash and fs escalate identically. Built ONCE per plugin from
  * `ctx.fs.sandboxMode` (the capability fact — is a confining backend mounted?)
- * and shared by both mutating tools.
+ * plus deployment-approved escalation targets, and shared by both mutating
+ * tools.
  *
  * @module @deepseek-ai/dsh-tool-fs/sandbox
  */
@@ -13,17 +14,17 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import { ESCALATION_TARGETS, approveEscalation, escalationHintMarker, sandboxDenialMarker, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
+import { approveEscalation, escalationHintMarker, sandboxDenialMarker, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { FsError } from '@deepseek-ai/dsh-fs'
 
-/** The two escalation arguments a mutating tool may carry (advertised only under a confining backend). */
+/** The two escalation arguments a mutating tool may carry when deployment policy permits escalation. */
 export interface FsEscalationArgs {
   sandbox_permissions?: string
   justification?: string
 }
 
-/** The schema fields for the escalation arguments, spread into a tool's `parameters` when a confining backend is mounted. */
+/** Schema fields spread into a tool's `parameters` when deployment policy permits escalation. */
 export interface EscalationSchemaFields {
   sandbox_permissions: { type: 'string'; enum: string[]; description: string }
   justification: { type: 'string'; description: string }
@@ -35,25 +36,25 @@ export interface EscalationSchemaFields {
  * product of `ctx` at plugin apply time.
  */
 export class FsSandboxController {
-  /** The escalation targets this composition advertises (`[]` when no confining backend is mounted). */
-  readonly escalationModes: readonly SandboxMode[]
+  /** The deployment-approved escalation targets this composition advertises. */
+  readonly escalationModes: readonly Exclude<SandboxMode, 'read-only'>[]
   /** Shared per-session policy resolver, required by a confining backend. */
   private readonly policy: SandboxPolicyService | undefined
 
   constructor(private readonly ctx: Context) {
     const defaultMode = ctx.fs.sandboxMode
-    this.escalationModes = defaultMode === undefined ? [] : ESCALATION_TARGETS
     this.policy = defaultMode === undefined ? undefined : ctx.get('sandboxPolicy')
     if (defaultMode !== undefined && this.policy === undefined) {
       throw new Error('tool-fs: the mounted filesystem confines but ctx.sandboxPolicy is missing')
     }
+    this.escalationModes = this.policy?.escalationTargets ?? []
   }
 
   /**
    * The escalation schema fields for a mutating tool's `parameters`. Call it
-   * only under a confining backend (guard on {@link escalationModes}); the
-   * enum pins the closed target vocabulary, the strict-wider check happens per
-   * call at execution.
+   * only when {@link escalationModes} is non-empty; the enum pins the
+   * deployment-approved targets, and the strict-wider check happens per call
+   * at execution.
    * @returns the two escalation parameter specs.
    */
   schemaFields(): EscalationSchemaFields {
@@ -90,12 +91,21 @@ export class FsSandboxController {
     if (args.sandbox_permissions === undefined || args.justification === undefined) {
       return standingPolicy
     }
-    if (this.escalationModes.length === 0) {
+    if (this.policy === undefined) {
       throw new Error('sandbox_permissions is not available in this composition (no sandboxing filesystem to escalate)')
+    }
+    if (this.escalationModes.length === 0) {
+      throw new Error('sandbox escalation is disabled by deployment policy')
     }
     const policy = standingPolicy as SandboxExecutionPolicy
     const approvedMode = await approveEscalation(
-      { requestedMode: args.sandbox_permissions, justification: args.justification, effectiveMode: policy.mode, subject: 'operation' },
+      {
+        requestedMode: args.sandbox_permissions,
+        allowedModes: this.escalationModes,
+        justification: args.justification,
+        effectiveMode: policy.mode,
+        subject: 'operation',
+      },
       {
         approver: this.ctx.get('approval'),
         agent: exec.agent,
@@ -107,7 +117,11 @@ export class FsSandboxController {
     return { ...policy, mode: approvedMode }
   }
 
-  /** Resolve the current session policy for read-only operations. */
+  /**
+   * Resolve the current session policy for read-only operations.
+   * @param exec - current tool execution carrying the optional agent session.
+   * @returns the resolved policy, or undefined for a non-confining filesystem.
+   */
   standingPolicy(exec: ToolExecution): SandboxExecutionPolicy | undefined {
     return this.policy?.resolve({ ...exec.agent ? { session: exec.agent.session } : {} })
   }
@@ -119,9 +133,8 @@ export class FsSandboxController {
    * WHILE keeping the structured `FS_SANDBOX_DENIED` code — `ToolRuntime`
    * populates `result.error` only for `HarnessError` instances, so a plain
    * `Error` would strip the code retry/observers key off. Any other error
-   * passes through unchanged. A `FS_SANDBOX_DENIED` only arises under a
-   * confining backend, which always advertises the escalation fields, so the
-   * hint always applies here.
+   * passes through unchanged. The retry hint is present only when deployment
+   * policy advertises at least one escalation target.
    * @param error - the error thrown by the mutation.
    * @param policy - the policy stamped onto the call (names the mode in the marker).
    * @returns the error to throw — the marker `FsError` for a sandbox denial, else the original.
@@ -131,6 +144,7 @@ export class FsSandboxController {
     // A FS_SANDBOX_DENIED only arises under a confining backend, whose tool
     // path always resolves a policy before mutation.
     const mode = (policy as SandboxExecutionPolicy).mode
-    return new FsError(`${sandboxDenialMarker(mode)}\n${escalationHintMarker('operation')}`, 'FS_SANDBOX_DENIED', { cause: error })
+    const hint = this.escalationModes.length === 0 ? '' : `\n${escalationHintMarker('operation')}`
+    return new FsError(`${sandboxDenialMarker(mode)}${hint}`, 'FS_SANDBOX_DENIED', { cause: error })
   }
 }

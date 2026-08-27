@@ -66,6 +66,7 @@ export function parseReadArgs(args: { file_path: string; offset?: number; limit?
  * Register the `read` tool and its system-prompt guidance.
  * @param ctx - the plugin context; registrations are effects scoped to it, and execution uses its `fs` service.
  * @param caps - the deployment's resolved read caps (plugin config after defaulting).
+ * @param sandbox - optional per-session policy resolver for a confining filesystem.
  */
 export function applyReadTool(ctx: Context, caps: ReadToolCaps, sandbox?: FsSandboxController): void {
   ctx.systemPrompt.section({

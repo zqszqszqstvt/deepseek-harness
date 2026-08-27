@@ -10,13 +10,20 @@ declare module '@deepseek-ai/cordis' {
 
 export const name = 'server-startup'
 export const inject = ['cmdlineArgs']
+/** Cordis service key carrying parsed Server startup values. */
 export const SERVER_STARTUP_SERVICE = 'serverStartup'
 
+/** Parsed Server command-line values shared by the HTTP and persistence plugins. */
 export interface ServerStartupValues {
+  /** HTTP bind address, or undefined before the command applies its default. */
   host?: '127.0.0.1' | '0.0.0.0'
+  /** HTTP listen port, or undefined to use the consumer default. */
   port?: number
+  /** Root for per-user workspaces and Server-owned state. */
   dataDir?: string
+  /** Absolute directory for Server-owned session persistence. */
   sessionsDir: string
+  /** Maximum user turns allowed to execute concurrently. */
   maxConcurrentTurns: number
 }
 

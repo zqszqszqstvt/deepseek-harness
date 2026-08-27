@@ -788,11 +788,18 @@ describe('sandbox escalation API (write/edit)', () => {
     }
   }
 
-  async function setupConfining(opts: { approval?: boolean } = {}) {
+  async function setupConfining(opts: {
+    approval?: boolean
+    policy?: {
+      mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+      maximumMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+      escalationTargets?: Array<'workspace-write' | 'danger-full-access'>
+    }
+  } = {}) {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
-    await ctx.plugin(SandboxPolicyService, { mode: 'workspace-write' })
+    await ctx.plugin(SandboxPolicyService, opts.policy ?? { mode: 'workspace-write' })
     await ctx.plugin(SandboxingFakeFs)
     await ctx.plugin(FsPolicy)
     if (opts.approval === true) await ctx.plugin(ApprovalService)
@@ -843,6 +850,35 @@ describe('sandbox escalation API (write/edit)', () => {
       expect(props['sandbox_permissions']?.enum).toEqual(['workspace-write', 'danger-full-access'])
       expect(props['justification']).toBeDefined()
     }
+  })
+
+  it('omits hints and rejects forged escalation when deployment policy disables it', async () => {
+    const { ctx, fs } = await setupConfining({
+      approval: true,
+      policy: { mode: 'workspace-write', maximumMode: 'workspace-write', escalationTargets: [] },
+    })
+    for (const name of ['write', 'edit'] as const) {
+      const props = fsSchema(ctx, name).parameters.properties
+      expect(props['sandbox_permissions']).toBeUndefined()
+      expect(props['justification']).toBeUndefined()
+    }
+    fs.rejectWith = new FsError('denied', 'FS_SANDBOX_DENIED')
+    const denied = await call(ctx, 'write', { file_path: 'a.txt', content: 'x' }, escalationAgent())
+    expect(text(denied)).toContain('[sandbox: file access denied under workspace-write mode]')
+    expect(text(denied)).not.toContain('escalation available')
+
+    fs.rejectWith = undefined
+    const prompted = vi.fn()
+    ctx.on('approval/request', () => { prompted(); return Promise.resolve('allowed-once' as const) })
+    const forged = await call(ctx, 'write', {
+      file_path: 'a.txt',
+      content: 'x',
+      sandbox_permissions: 'danger-full-access',
+      justification: 'escape the deployment boundary',
+    }, escalationAgent())
+    expect(text(forged)).toContain('sandbox escalation is disabled by deployment policy')
+    expect(prompted).not.toHaveBeenCalled()
+    expect(fs.stamped).toHaveLength(1)
   })
 
   it('a plain write stamps the default mode with the calling session root', async () => {

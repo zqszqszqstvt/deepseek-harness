@@ -15,6 +15,7 @@ import { sessionResolveOptions } from './session-cwd.ts'
  * @param ctx - the plugin context providing filesystem resolution and observation events.
  * @param exec - the current tool execution, including session cwd and cancellation.
  * @param requestedPath - the raw path supplied to the tool.
+ * @param sandboxPolicy - optional resolved read policy passed to a confining filesystem.
  * @returns the resolved target and its single stat result.
  */
 export async function resolveRegularReadTarget(

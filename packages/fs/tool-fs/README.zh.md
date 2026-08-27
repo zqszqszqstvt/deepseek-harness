@@ -51,7 +51,7 @@ await ctx.plugin(ToolFs)                                  // this package — re
 
 工具在每次分派中把 `exec`（工具执行上下文）作为不透明 `actor` 传入。默认 thunk 返回 `undefined`（不受约束的裸提供方）。加载 `@deepseek-ai/dsh-fs-observation-policy` 后，它会占用单个决策槽：返回 `createIfAbsent`/`replaceIfVersion`/`{ version }` 或抛出 `FS_NOT_OBSERVED`，并在 `fs/observed` 时记录。后端错误（`FsError`）和抛出的 `FS_NOT_OBSERVED` 会流经 `ToolRuntime.execute()`，变成 `isError` 工具结果，并附带 `{ name, code }`。
 
-当 `ctx.fs.sandboxMode` 表明提供方施加沙箱限制时，write/edit 会公开 `sandbox_permissions` 与 `justification`，并通过 `ctx.approval` 处理获批后的重试。策略归属方会贡献与具体能力无关的常驻策略；工具结果仍保留针对具体操作的拒绝与重试引导。
+当 `ctx.fs.sandboxMode` 表明提供方施加沙箱限制时，write/edit 会通过 `ctx.sandboxPolicy` 解析常驻策略。仅当 `ctx.sandboxPolicy.escalationTargets` 非空时，它们才公开 `sandbox_permissions` 与 `justification`、通过 `ctx.approval` 处理获批后的重试，并在拒绝结果中附加重试引导。强行传入部署禁用的目标会在审批或变更前失败；`maximumMode` 还会封顶普通会话与显式覆盖。
 
 ## `fs/observed` 发后即忘
 

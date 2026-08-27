@@ -166,6 +166,7 @@ function imageReadContent(value: ImageReadValue): ContentBlock[] {
  * direct callers and gates on the calling route's declared image input.
  * @param ctx - the registration scope; execution uses its `fs` service plus
  *   the optional `attachments`/`llm` services.
+ * @param sandbox - optional per-session policy resolver for a confining filesystem.
  */
 export function applyReadImageTool(ctx: Context, sandbox?: FsSandboxController): void {
   ctx.tools.register(defineTool({

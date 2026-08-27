@@ -687,12 +687,15 @@ Requires: `sandboxPolicy`
  * (mode + `workspace-write` fallback root) is NOT here — `ctx.sandboxPolicy`
  * resolves each calling session for every enforcing capability.
  */
-export type Config = LocalConfig
+export interface Config extends LocalConfig {
+  /** When true, every in-process filesystem read is contained in the session workspace. */
+  strictReads?: boolean
+}
 ```
 
 Depends on: [`LocalConfig`](#deepseek-aidsh-fs-local)
 
-Source: [`packages/fs/fs-sandbox/src/index.ts:49`](../packages/fs/fs-sandbox/src/index.ts)
+Source: [`packages/fs/fs-sandbox/src/index.ts:50`](../packages/fs/fs-sandbox/src/index.ts)
 
 <a id="deepseek-aidsh-goal"></a>
 
@@ -1630,6 +1633,8 @@ Source: [`packages/guard/repeat-tool-reminder/src/index.ts:28`](../packages/guar
 ```ts config-catalog
 /** Plugin config. All optional — `static Config` supplies the defaults. */
 export interface Config {
+  /** When true, Linux bwrap mounts only system runtime paths and the session workspace. */
+  strictFilesystem?: boolean
   /**
    * Override the runner argv; bwrap-compatible profile arguments are appended. A
    * non-empty override asserts full enforcement and skips built-in selection and
@@ -1670,6 +1675,10 @@ Source: [`packages/sandbox/sandbox-local/src/index.ts:44`](../packages/sandbox/s
 export interface Config {
   /** File-sandbox mode a session starts from (default: `read-only`). */
   mode?: SandboxMode
+  /** Highest file-sandbox mode this deployment may resolve (default: `danger-full-access`). */
+  maximumMode?: SandboxMode
+  /** Modes model-facing tools may request through one-shot approval. */
+  escalationTargets?: Array<Exclude<SandboxMode, 'read-only'>>
   /**
    * Fallback root for agentless calls and sessions without a cwd (default:
    * `process.cwd()`). Normal agent calls use their session cwd instead.
@@ -1680,7 +1689,7 @@ export interface Config {
 
 Depends on: [`SandboxMode`](subsystems/sandbox.md)
 
-Source: [`packages/sandbox/sandbox-policy/src/index.ts:67`](../packages/sandbox/sandbox-policy/src/index.ts)
+Source: [`packages/sandbox/sandbox-policy/src/index.ts:73`](../packages/sandbox/sandbox-policy/src/index.ts)
 
 <a id="deepseek-aidsh-sdk-jsonrpc-server"></a>
 
@@ -1705,6 +1714,28 @@ export interface JsonRpcConfig {
 Depends on: `Readable` (`node:stream`) · `Writable` (`node:stream`)
 
 Source: [`packages/sdk/server/src/index.ts:25`](../packages/sdk/server/src/index.ts)
+
+<a id="deepseek-aidsh-server"></a>
+
+## `@deepseek-ai/dsh-server`
+
+Requires: `webServer` · `apiProxy` · `serverStartup`
+
+```ts config-catalog
+/** Multi-user HTTP Server runtime config resolved by the startup plugin and Loader. */
+export interface Config {
+  /** HTTP bind address supplied by the shared Server startup parser. */
+  host: '127.0.0.1' | '0.0.0.0'
+  /** HTTP listen port supplied by the shared Server startup parser. */
+  port: number
+  /** Root for per-user workspaces and Server-owned session data. */
+  dataDir?: string
+  /** Maximum user turns executing concurrently before later requests queue. */
+  maxConcurrentTurns: number
+}
+```
+
+Source: [`packages/bundle/server/src/index.ts:97`](../packages/bundle/server/src/index.ts)
 
 <a id="deepseek-aidsh-session-persistence-jsonl"></a>
 
@@ -2780,7 +2811,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/fs/tool-str-replace-editor/src/index.ts:497`](../packages/fs/tool-str-replace-editor/src/index.ts)
+Source: [`packages/fs/tool-str-replace-editor/src/index.ts:505`](../packages/fs/tool-str-replace-editor/src/index.ts)
 
 <a id="deepseek-aidsh-tool-subagent"></a>
 
@@ -2885,7 +2916,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/terminal/tool-terminal/src/index.ts:35`](../packages/terminal/tool-terminal/src/index.ts)
+Source: [`packages/terminal/tool-terminal/src/index.ts:36`](../packages/terminal/tool-terminal/src/index.ts)
 
 <a id="deepseek-aidsh-tool-todo"></a>
 
