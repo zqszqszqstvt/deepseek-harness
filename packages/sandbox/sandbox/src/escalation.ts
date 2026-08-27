@@ -38,7 +38,7 @@ export const WIDER_MODES: Record<string, readonly SandboxMode[]> = {
  * mode sits below it (a `danger-full-access` default would advertise nothing
  * while a narrower-switched session stays confined with no lever).
  */
-export const ESCALATION_TARGETS: readonly SandboxMode[] = ['workspace-write', 'danger-full-access']
+export const ESCALATION_TARGETS: readonly Exclude<SandboxMode, 'read-only'>[] = ['workspace-write', 'danger-full-access']
 
 /**
  * Validate the escalation argument pairing a tool schema cannot express:

@@ -867,7 +867,7 @@ describe('sandbox escalation API (write/edit)', () => {
     expect(text(denied)).toContain('[sandbox: file access denied under workspace-write mode]')
     expect(text(denied)).not.toContain('escalation available')
 
-    fs.rejectWith = undefined
+    delete fs.rejectWith
     const prompted = vi.fn()
     ctx.on('approval/request', () => { prompted(); return Promise.resolve('allowed-once' as const) })
     const forged = await call(ctx, 'write', {
