@@ -71,6 +71,16 @@ function approvalIdFrom(pathname: string): string | undefined {
   }
 }
 
+function questionRpcIdFrom(pathname: string): string | undefined {
+  const match = /^\/v1\/users\/[^/]+\/questions\/([^/]+)$/.exec(pathname)
+  if (match === null) return undefined
+  try {
+    return decodeURIComponent(match[1] as string)
+  } catch {
+    return undefined
+  }
+}
+
 function sendResult(res: ServerResponse, result: { ok: boolean; [key: string]: unknown }): void {
   json(res, result.ok ? 200 : 400, result)
 }
@@ -149,6 +159,25 @@ export function apply(ctx: Context, config: Config): void {
           result: {
             ok: true,
             value: { sessionId: state.sessionId, approvalId, outcome: body.outcome },
+          },
+        })
+        return json(res, 200, receipt)
+      }
+      const questionRpcId = questionRpcIdFrom(pathname)
+      if (questionRpcId !== undefined && req.method === 'POST') {
+        const answer = await readJson(req)
+        if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {
+          return json(res, 400, { ok: false, error: 'request body must be a JSON object' })
+        }
+        if (questionRpcId.length === 0 || questionRpcId.length > 512) {
+          return json(res, 400, { ok: false, error: 'rpcId must be a non-empty string' })
+        }
+        const receipt = await ctx.apiProxy.respond({
+          type: 'client-response',
+          rpcId: RpcId(questionRpcId),
+          result: {
+            ok: true,
+            value: { sessionId: state.sessionId, answer },
           },
         })
         return json(res, 200, receipt)

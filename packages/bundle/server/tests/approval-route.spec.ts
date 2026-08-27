@@ -1,7 +1,8 @@
-/** HTTP approval response bridge for the multi-user server. */
+/** HTTP interactive response bridges for the multi-user server. */
 
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -49,13 +50,37 @@ async function start(respond: (message: ClientResponse) => Promise<RpcReceipt>):
   return context.webServer.port
 }
 
-async function post(port: number, userId: string, approvalId: string, body: unknown): Promise<{ status: number; body: unknown }> {
-  const response = await fetch(`http://127.0.0.1:${String(port)}/v1/users/${encodeURIComponent(userId)}/approvals/${encodeURIComponent(approvalId)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+async function postJson(port: number, path: string, body: unknown): Promise<{ status: number; body: unknown }> {
+  const payload = JSON.stringify(body)
+  return new Promise((resolve, reject) => {
+    const req = request({
+      host: '127.0.0.1',
+      port,
+      path,
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) },
+    }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) })
+        } catch (error) {
+          reject(error)
+        }
+      })
+    })
+    req.on('error', reject)
+    req.end(payload)
   })
-  return { status: response.status, body: await response.json() }
+}
+
+async function post(port: number, userId: string, approvalId: string, body: unknown): Promise<{ status: number; body: unknown }> {
+  return postJson(port, `/v1/users/${encodeURIComponent(userId)}/approvals/${encodeURIComponent(approvalId)}`, body)
+}
+
+async function postQuestion(port: number, userId: string, rpcId: string, body: unknown): Promise<{ status: number; body: unknown }> {
+  return postJson(port, `/v1/users/${encodeURIComponent(userId)}/questions/${encodeURIComponent(rpcId)}`, body)
 }
 
 describe('server approval route', () => {
@@ -113,5 +138,62 @@ describe('server approval route', () => {
     expect(await post(port, 'alice', 'approval-1', { rpcId: 'request-1', outcome: 'always' }))
       .toEqual({ status: 400, body: { ok: false, error: 'outcome must be allowed-once or rejected' } })
     expect(seen).toEqual([])
+  })
+})
+
+describe('server question route', () => {
+  it('bridges the complete answer batch with the session derived from the URL user', async () => {
+    const seen: ClientResponse[] = []
+    const port = await start((message) => {
+      seen.push(message)
+      return Promise.resolve({ accepted: true })
+    })
+    const answer = {
+      answers: [
+        { id: 'runtime', selected: ['Docker'] },
+        { id: 'notes', selected: [], custom: 'Use the internal registry' },
+      ],
+    }
+
+    const result = await postQuestion(port, 'alice', 'question-1', answer)
+
+    expect(result).toEqual({ status: 200, body: { accepted: true } })
+    expect(seen).toEqual([{
+      type: 'client-response',
+      rpcId: 'question-1',
+      result: {
+        ok: true,
+        value: { sessionId: sessionIdFor('alice'), answer },
+      },
+    }])
+  })
+
+  it('cannot answer another user session through a different user route', async () => {
+    const aliceSessionId = sessionIdFor('alice')
+    const port = await start(async (message) => {
+      const value = message.result.ok ? message.result.value as { sessionId?: unknown } : undefined
+      return message.rpcId === 'alice-question' && value?.sessionId === aliceSessionId
+        ? { accepted: true }
+        : { accepted: false, reason: 'bad-response' }
+    })
+
+    expect(await postQuestion(port, 'bob', 'alice-question', { answers: [{ id: 'runtime', selected: ['Docker'] }] }))
+      .toEqual({ status: 200, body: { accepted: false, reason: 'bad-response' } })
+    expect(await postQuestion(port, 'alice', 'alice-question', { answers: [{ id: 'runtime', selected: ['Docker'] }] }))
+      .toEqual({ status: 200, body: { accepted: true } })
+  })
+
+  it('rejects non-object bodies and delegates answer validation to ApiProxy', async () => {
+    const seen: ClientResponse[] = []
+    const port = await start((message) => {
+      seen.push(message)
+      return Promise.resolve({ accepted: false, reason: 'bad-response' })
+    })
+
+    expect(await postQuestion(port, 'alice', 'question-1', null))
+      .toEqual({ status: 400, body: { ok: false, error: 'request body must be a JSON object' } })
+    expect(await postQuestion(port, 'alice', 'question-1', { answers: 'not-an-array' }))
+      .toEqual({ status: 200, body: { accepted: false, reason: 'bad-response' } })
+    expect(seen).toHaveLength(1)
   })
 })
