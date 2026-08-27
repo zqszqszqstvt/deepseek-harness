@@ -2,7 +2,6 @@
 
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -11,6 +10,7 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as Server from '../src/index.ts'
 import type { ServerStartupValues } from '../src/startup.ts'
+import { postJson } from './http-testkit.ts'
 
 let context: Context | undefined
 let dataDir: string | undefined
@@ -40,6 +40,7 @@ async function start(respond: (message: ClientResponse) => Promise<RpcReceipt>):
     respond,
   } as unknown as ApiProxy
   context.provide('apiProxy', api)
+  context.provide('agents', { get: () => undefined } as never)
   context.provide('serverStartup', {
     dataDir,
     sessionsDir: join(dataDir, 'sessions'),
@@ -48,31 +49,6 @@ async function start(respond: (message: ClientResponse) => Promise<RpcReceipt>):
   await context.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await context.plugin(Server, { host: '127.0.0.1', port: 0, dataDir, maxConcurrentTurns: 2 })
   return context.webServer.port
-}
-
-async function postJson(port: number, path: string, body: unknown): Promise<{ status: number; body: unknown }> {
-  const payload = JSON.stringify(body)
-  return new Promise((resolve, reject) => {
-    const req = request({
-      host: '127.0.0.1',
-      port,
-      path,
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) },
-    }, (res) => {
-      const chunks: Buffer[] = []
-      res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
-      res.on('end', () => {
-        try {
-          resolve({ status: res.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) })
-        } catch (error) {
-          reject(error)
-        }
-      })
-    })
-    req.on('error', reject)
-    req.end(payload)
-  })
 }
 
 async function post(port: number, userId: string, approvalId: string, body: unknown): Promise<{ status: number; body: unknown }> {

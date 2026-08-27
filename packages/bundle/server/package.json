@@ -17,6 +17,7 @@
   "license": "MIT",
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "dependencies": {
+    "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-app-boot": "workspace:^",
     "@deepseek-ai/dsh-cmdline": "workspace:^",
     "@deepseek-ai/dsh-host-apiproxy": "workspace:^",

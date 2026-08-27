@@ -1719,7 +1719,7 @@ Source: [`packages/sdk/server/src/index.ts:25`](../packages/sdk/server/src/index
 
 ## `@deepseek-ai/dsh-server`
 
-Requires: `webServer` · `apiProxy` · `serverStartup`
+Requires: `webServer` · `apiProxy` · `agents` · `serverStartup`
 
 ```ts config-catalog
 /** Multi-user HTTP Server runtime config resolved by the startup plugin and Loader. */
@@ -1735,7 +1735,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/bundle/server/src/index.ts:97`](../packages/bundle/server/src/index.ts)
+Source: [`packages/bundle/server/src/index.ts:108`](../packages/bundle/server/src/index.ts)
 
 <a id="deepseek-aidsh-session-persistence-jsonl"></a>
 

@@ -8,11 +8,12 @@ import { RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { ServerStartupValues } from './startup.ts'
+import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-apiproxy'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 
 export const name = 'server'
-export const inject = ['webServer', 'apiProxy', 'serverStartup']
+export const inject = ['webServer', 'apiProxy', 'agents', 'serverStartup']
 
 const MAX_BODY_BYTES = 1024 * 1024
 
@@ -121,11 +122,21 @@ export function apply(ctx: Context, config: Config): void {
   const active = new Map<string, Promise<void>>()
   const limit = config.maxConcurrentTurns ?? startup.maxConcurrentTurns
   let running = 0
-  const queue: (() => void)[] = []
+  const queue: ((release: () => void) => void)[] = []
+  const makeRelease = (): (() => void) => {
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const next = queue.shift()
+      if (next === undefined) running--
+      else next(makeRelease())
+    }
+  }
   const acquire = async (): Promise<() => void> => {
-    if (running >= limit) await new Promise<void>(resolveWait => queue.push(resolveWait))
+    if (running >= limit) return new Promise(resolveWait => queue.push(resolveWait))
     running++
-    return () => { running--; queue.shift()?.() }
+    return makeRelease()
   }
   const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const pathname = new URL(req.url ?? '/', 'http://dsh').pathname
@@ -193,18 +204,42 @@ export function apply(ctx: Context, config: Config): void {
       if (pathname.endsWith('/turns') && req.method === 'POST') {
         const body = await readJson(req) as TurnBody
         if (typeof body.message !== 'string' || body.message.length === 0) return json(res, 400, { ok: false, error: 'message must be a non-empty string' })
-        const release = await acquire()
-        const previous = active.get(state.userId)
-        if (previous !== undefined) await previous
-        const work = (async () => {
+        const message = body.message
+        const mode = body.mode === 'steer' ? 'steer' : 'queue'
+        const agent = ctx.agents.get(state.sessionId)
+        if (agent === undefined) throw new Error(`session "${state.sessionId}" has no live agent`)
+        if (mode === 'steer' && agent.status === 'running') {
           const result = await ctx.apiProxy.sessions.prompt({ rpcId: RpcId(randomUUID()), payload: {
-            sessionId: state.sessionId, mode: body.mode === 'steer' ? 'steer' : 'queue', content: [{ type: 'text', text: body.message as string }],
+            sessionId: state.sessionId, mode, content: [{ type: 'text', text: message }],
           } })
-          sendResult(res, result.result)
-        })().finally(release)
+          return sendResult(res, result.result)
+        }
+        const previous = active.get(state.userId)
+        const work = (async () => {
+          if (previous !== undefined) {
+            try {
+              await previous
+            } catch {
+              // The preceding handler reports its own failure; later queued work remains independent.
+            }
+          }
+          const release = await acquire()
+          try {
+            const result = await ctx.apiProxy.sessions.prompt({ rpcId: RpcId(randomUUID()), payload: {
+              sessionId: state.sessionId, mode, content: [{ type: 'text', text: message }],
+            } })
+            if (result.result.ok) await agent.whenIdle()
+            sendResult(res, result.result)
+          } finally {
+            release()
+          }
+        })()
         active.set(state.userId, work)
-        await work
-        if (active.get(state.userId) === work) active.delete(state.userId)
+        try {
+          await work
+        } finally {
+          if (active.get(state.userId) === work) active.delete(state.userId)
+        }
         return
       }
       return json(res, 404, { ok: false, error: 'user route not found' })

@@ -1721,7 +1721,7 @@ export interface JsonRpcConfig {
 
 ## `@deepseek-ai/dsh-server`
 
-需要：`webServer` · `apiProxy` · `serverStartup`
+需要：`webServer` · `apiProxy` · `agents` · `serverStartup`
 
 ```ts config-catalog
 /** Multi-user HTTP Server runtime config resolved by the startup plugin and Loader. */
@@ -1737,7 +1737,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/bundle/server/src/index.ts:97`](../packages/bundle/server/src/index.ts)
+来源：[`packages/bundle/server/src/index.ts:108`](../packages/bundle/server/src/index.ts)
 
 <a id="deepseek-aidsh-session-persistence-jsonl"></a>
 
