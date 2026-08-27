@@ -18,6 +18,7 @@ const MAX_BODY_BYTES = 1024 * 1024
 
 interface UserState { userId: string; key: string; cwd: string; sessionId: ReturnType<typeof SessionId> }
 interface TurnBody { message?: unknown; mode?: unknown }
+interface ApprovalBody { rpcId?: unknown; outcome?: unknown }
 
 function userState(root: string, userId: string): UserState {
   const key = createHash('sha256').update(userId).digest('hex')
@@ -52,6 +53,16 @@ function json(res: ServerResponse, status: number, value: unknown): void {
 
 function userIdFrom(pathname: string): string | undefined {
   const match = /^\/v1\/users\/([^/]+)(?:\/.*)?$/.exec(pathname)
+  if (match === null) return undefined
+  try {
+    return decodeURIComponent(match[1] as string)
+  } catch {
+    return undefined
+  }
+}
+
+function approvalIdFrom(pathname: string): string | undefined {
+  const match = /^\/v1\/users\/[^/]+\/approvals\/([^/]+)$/.exec(pathname)
   if (match === null) return undefined
   try {
     return decodeURIComponent(match[1] as string)
@@ -111,6 +122,32 @@ export function apply(ctx: Context, config: Config): void {
     try {
       await ensureUser(state, ctx.apiProxy)
       if (pathname.endsWith('/events') && req.method === 'GET') return eventsFor(ctx.apiProxy, state.sessionId, req, res)
+      const approvalId = approvalIdFrom(pathname)
+      if (approvalId !== undefined && req.method === 'POST') {
+        const parsedBody = await readJson(req)
+        if (typeof parsedBody !== 'object' || parsedBody === null || Array.isArray(parsedBody)) {
+          return json(res, 400, { ok: false, error: 'request body must be a JSON object' })
+        }
+        const body = parsedBody as ApprovalBody
+        if (approvalId.length === 0 || approvalId.length > 512) {
+          return json(res, 400, { ok: false, error: 'approvalId must be a non-empty string' })
+        }
+        if (typeof body.rpcId !== 'string' || body.rpcId.length === 0 || body.rpcId.length > 512) {
+          return json(res, 400, { ok: false, error: 'rpcId must be a non-empty string' })
+        }
+        if (body.outcome !== 'allowed-once' && body.outcome !== 'rejected') {
+          return json(res, 400, { ok: false, error: 'outcome must be allowed-once or rejected' })
+        }
+        const receipt = await ctx.apiProxy.respond({
+          type: 'client-response',
+          rpcId: RpcId(body.rpcId),
+          result: {
+            ok: true,
+            value: { sessionId: state.sessionId, approvalId, outcome: body.outcome },
+          },
+        })
+        return json(res, 200, receipt)
+      }
       if (pathname.endsWith('/history') && req.method === 'GET') {
         const result = await ctx.apiProxy.sessions.history({ rpcId: RpcId(randomUUID()), payload: { sessionId: state.sessionId } })
         return sendResult(res, result.result)
