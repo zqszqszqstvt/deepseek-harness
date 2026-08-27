@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -23,6 +23,8 @@ import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 
 const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: '/' }), '--', 'true'], { timeout: 5_000, stdio: 'ignore' })
 const bwrapUsable = probe.status === 0
+const strictProbe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: tmpdir() }, true), '--', 'true'], { timeout: 5_000, stdio: 'ignore' })
+const strictBwrapUsable = strictProbe.status === 0
 
 let ctx: Context | undefined
 const tempDirs: string[] = []
@@ -39,9 +41,9 @@ async function tempDir(base: string): Promise<string> {
   return dir
 }
 
-async function sandboxedBash(workspace: string, mode: 'read-only' | 'workspace-write'): Promise<SandboxBashExecutor> {
+async function sandboxedBash(workspace: string, mode: 'read-only' | 'workspace-write', strictFilesystem = false): Promise<SandboxBashExecutor> {
   ctx = new Context()
-  await ctx.plugin(LocalSandboxProvider, {})
+  await ctx.plugin(LocalSandboxProvider, { strictFilesystem })
   await ctx.plugin(SandboxPolicyService, { mode, workspaceRoot: workspace })
   await ctx.plugin(LocalSubprocessRuntime)
   await ctx.plugin(SandboxBashExecutor, { cwd: workspace, timeoutMs: 30_000 })
@@ -95,5 +97,21 @@ describe.skipIf(!bwrapUsable)('bash-sandbox: real bwrap confinement through ctx.
     expect(retried.exitCode).toBe(0)
     expect(retried.sandbox).toEqual({ mode: 'workspace-write', denied: false, enforcement: 'full' })
     expect(readFileSync(join(workdir, 'escalated.txt'), 'utf8')).toBe('escalated')
+  })
+})
+
+describe.skipIf(!strictBwrapUsable)('bash-sandbox: strict bwrap boundary through ctx.shell', () => {
+  it('reports an outside mkdir-and-write as a sandbox denial at execution time', async () => {
+    const workdir = await tempDir(homedir())
+    const outside = await tempDir(homedir())
+    const target = join(outside, 'new-parent', 'denied.txt')
+    const bash = await sandboxedBash(workdir, 'workspace-write', true)
+    const result = await bash.run(bash.resolve({
+      command: `mkdir -p ${join(outside, 'new-parent')} && printf escaped > ${target}`,
+    }))
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr.text.toLowerCase()).toContain('read-only file system')
+    expect(result.sandbox).toEqual({ mode: 'workspace-write', denied: true, enforcement: 'full' })
+    expect(existsSync(target)).toBe(false)
   })
 })

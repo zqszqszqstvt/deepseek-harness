@@ -19,6 +19,8 @@ import { bwrapProfileArgs } from '../src/profiles.ts'
 
 const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: '/' }), '--', 'true'], { timeout: 5_000, stdio: 'ignore' })
 const bwrapUsable = probe.status === 0
+const strictProbe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: tmpdir() }, true), '--', 'true'], { timeout: 5_000, stdio: 'ignore' })
+const strictBwrapUsable = strictProbe.status === 0
 
 let ctx: Context | undefined
 const tempDirs: string[] = []
@@ -37,9 +39,9 @@ async function tempDir(base: string): Promise<string> {
   return dir
 }
 
-async function provider(): Promise<LocalSandboxProvider> {
+async function provider(config: { strictFilesystem?: boolean } = {}): Promise<LocalSandboxProvider> {
   ctx = new Context()
-  await ctx.plugin(LocalSandboxProvider, {})
+  await ctx.plugin(LocalSandboxProvider, config)
   return ctx.sandbox as LocalSandboxProvider
 }
 
@@ -141,6 +143,24 @@ describe.skipIf(!bwrapUsable)('sandbox-local: real bwrap confinement', () => {
     const { result } = runConfined(sandbox, `printf tmp-ok > ${target} && cat ${target}`, { mode: 'workspace-write', workspaceRoot: workdir })
     expect(result.status).toBe(0)
     expect(result.stdout).toBe('tmp-ok')
+    expect(existsSync(target)).toBe(false)
+  })
+})
+
+describe.skipIf(!strictBwrapUsable)('sandbox-local: strict bwrap filesystem boundary', () => {
+  it('rejects an outside mkdir-and-write during execution instead of creating an ephemeral file', async () => {
+    const workdir = await tempDir(homedir())
+    const outside = await tempDir(homedir())
+    const target = join(outside, 'new-parent', 'denied.txt')
+    const sandbox = await provider({ strictFilesystem: true })
+    const { result, confined } = runConfined(
+      sandbox,
+      `mkdir -p ${join(outside, 'new-parent')} && printf escaped > ${target}`,
+      { mode: 'workspace-write', workspaceRoot: workdir },
+    )
+    expect(confined.argv).toContain('--remount-ro')
+    expect(result.status).not.toBe(0)
+    expect(result.stderr.toLowerCase()).toContain('read-only file system')
     expect(existsSync(target)).toBe(false)
   })
 })

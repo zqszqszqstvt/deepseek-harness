@@ -74,7 +74,7 @@ describe('profile dialects', () => {
       '--ro-bind', '/run', '/run',
       '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent',
       '--ro-bind', '/ws', '/ws',
-      '--tmpfs', '/tmp', '--bind', '/ws', '/ws',
+      '--tmpfs', '/tmp', '--bind', '/ws', '/ws', '--remount-ro', '/',
     ])
   })
 

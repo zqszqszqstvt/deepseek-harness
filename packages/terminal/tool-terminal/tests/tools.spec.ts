@@ -306,6 +306,13 @@ describe('tool-terminal foreground API', () => {
     expect(ctx.tools.get('terminal_list')?.presentCall?.({})).toMatchObject({ card: 'generic', title: 'List terminal sessions' })
   })
 
+  it('explains the confined terminal workspace boundary in the prompt and open tool', async () => {
+    const { ctx } = await setup(false)
+    const prompt = (await ctx.systemPrompt.assemble()).sections.find(section => section.name === 'tool:pty')?.text ?? ''
+    expect(prompt).toContain('writes outside that workspace')
+    expect(ctx.tools.get('terminal_open')?.description).toContain('restricted to the current session workspace')
+  })
+
   it('configuration-gates background sends and validates the final result bound', async () => {
     const disabled = await setup(true, { enableRunInBackground: false })
     const definition = disabled.ctx.tools.get('terminal_send')

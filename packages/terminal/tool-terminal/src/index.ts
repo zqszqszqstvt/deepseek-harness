@@ -157,12 +157,12 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.systemPrompt.section({
     name: 'tool:pty',
     order: 106,
-    text: 'Use a terminal session only when work needs persistent terminal state or interactive stdin; prefer shell/read/write/edit for bounded one-shot operations. Track every terminal session id and close sessions that no longer matter. An inferred_idle or timeout result does not prove the foreground command exited.',
+    text: 'Use a terminal session only when work needs persistent terminal state or interactive stdin; prefer shell/read/write/edit for bounded one-shot operations. Confined sessions start in the current session workspace; under workspace-write, writes outside that workspace (apart from the sandbox-managed temporary area) are rejected during execution. Track every terminal session id and close sessions that no longer matter. An inferred_idle or timeout result does not prove the foreground command exited.',
   })
 
   ctx.tools.register(defineTool({
     name: 'terminal_open',
-    description: 'Create a persistent, owner-isolated terminal session from a registered backend type. Use this for shell or REPL state that must survive across tool calls.',
+    description: 'Create a persistent, owner-isolated terminal session from a registered backend type. Confined sessions are restricted to the current session workspace for file writes. Use this for shell or REPL state that must survive across tool calls.',
     parameters: {
       type: { type: 'string', required: true, description: 'Registered terminal backend type, usually "shell".' },
       name: { type: 'string', description: 'Optional owner-local display name such as "main" or "gdb".' },

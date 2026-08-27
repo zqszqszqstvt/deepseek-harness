@@ -11,6 +11,8 @@ import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 /**
  * Build the bwrap profile arguments for one file-effect policy.
  * @param policy - file-effect policy to express as bwrap mounts.
+ * @param strictFilesystem - when true, use an empty read-only root and expose
+ *   only runtime paths plus the policy workspace (used by the server profile).
  * @returns profile arguments before the trailing separator and command argv.
  */
 export function bwrapProfileArgs(policy: SandboxPolicy, strictFilesystem = false): string[] {
@@ -33,6 +35,13 @@ export function bwrapProfileArgs(policy: SandboxPolicy, strictFilesystem = false
   if (policy.mode === 'workspace-write') {
     args.push('--tmpfs', '/tmp')
     args.push('--bind', policy.workspaceRoot, policy.workspaceRoot)
+  }
+  if (strictFilesystem) {
+    // The empty root is itself a writable tmpfs unless it is remounted. Without
+    // this step an absent host path such as /home/... can be created inside the
+    // namespace and the command appears successful even though the file vanishes
+    // with the namespace. Child bind mounts retain their own read/write flags.
+    args.push('--remount-ro', '/')
   }
   return args
 }

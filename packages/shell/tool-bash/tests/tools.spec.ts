@@ -375,6 +375,13 @@ describe('bash tool', () => {
     expect(bashSchema.description).toContain('job_output')
   })
 
+  it('teaches the model that workspace-write rejects paths outside the session workspace', async () => {
+    const { ctx } = await setupSandboxed()
+    const description = ctx.tools.get('bash')?.description ?? ''
+    expect(description).toContain('writes are allowed only inside the current session workspace')
+    expect(description).toContain('paths outside that boundary are rejected during the command')
+  })
+
   it('contributes the exit-code habit as its prompt section (guidance the descriptions cannot carry)', async () => {
     const ctx = await setup()
     ctx.systemPrompt.section({ name: 'test:before-bash', order: 104, text: 'before' })

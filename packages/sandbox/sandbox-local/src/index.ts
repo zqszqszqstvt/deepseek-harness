@@ -66,9 +66,10 @@ export interface Config {
   probeTimeoutMs?: number
 }
 
-/** Probe whether `bwrap` can create the profile; the provider caches the bounded result. */
-function defaultProbeBwrap(timeoutMs: number): boolean {
-  const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: '/' }), '--', 'true'], {
+/** Probe whether `bwrap` can create the exact profile this provider will use. */
+function defaultProbeBwrap(timeoutMs: number, strictFilesystem = false): boolean {
+  const workspaceRoot = strictFilesystem ? tmpdir() : '/'
+  const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot }, strictFilesystem), '--', 'true'], {
     timeout: timeoutMs,
     stdio: 'ignore',
   })
@@ -526,7 +527,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     // partial for its documented Everyone and hard-link boundaries.
     switch (runner) {
       case 'bwrap': {
-        const probe = this.internals.probeBwrap ?? (() => defaultProbeBwrap(this.probeTimeoutMs))
+        const probe = this.internals.probeBwrap ?? (() => defaultProbeBwrap(this.probeTimeoutMs, this.strictFilesystem))
         return probe() ? 'full' : 'unusable'
       }
       case 'landlock': {

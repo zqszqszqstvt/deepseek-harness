@@ -75,7 +75,7 @@ function bashDescription(backgroundEnabled: boolean, escalationModes: readonly S
     + 'Each call runs in a fresh shell: no state (cwd, variables, functions) persists between calls — '
     + 'pass `workdir` instead of using `cd`. Non-zero exits are reported as `[exit code: N]`. '
     + `Current harness environment facts are exposed through managed \`$${DSH_ENV_PREFIX}*\` variables; inspect them when needed. `
-    + 'Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]` — a policy denial, not a bug in the command; do not retry another way. '
+    + 'Commands may run under a file sandbox. Under `workspace-write`, writes are allowed only inside the current session workspace (plus the sandbox-managed temporary area); paths outside that boundary are rejected during the command. A blocked file operation is reported as `[sandbox: file access denied under <mode> mode]` — a policy denial, not a bug in the command; do not retry another way. '
     + 'Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. '
     + background
   if (escalationModes.length === 0) return base
