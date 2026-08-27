@@ -25,6 +25,12 @@ export interface ServerStartupValues {
   sessionsDir: string
   /** Maximum user turns allowed to execute concurrently. */
   maxConcurrentTurns: number
+  /** Maximum open Server SSE responses across all users. */
+  maxSseConnections: number
+  /** Maximum open Server SSE responses for one user. */
+  maxSseConnectionsPerUser: number
+  /** Maximum encoded bytes waiting behind one slow SSE response. */
+  sseClientBufferBytes: number
 }
 
 interface ServerOptions {
@@ -32,6 +38,9 @@ interface ServerOptions {
   port?: string
   dataDir?: string
   maxConcurrent?: string
+  maxSseConnections?: string
+  maxSseConnectionsPerUser?: string
+  sseBufferBytes?: string
 }
 
 function serverCommand(): Command {
@@ -43,6 +52,9 @@ function serverCommand(): Command {
     .option('--port <port>', 'listen port; pass 0 to let the OS pick a free one')
     .option('--data-dir <path>', 'root directory for per-user workspaces and state')
     .option('--max-concurrent <n>', 'maximum active turns across users (default: 8)')
+    .option('--max-sse-connections <n>', 'maximum open SSE responses across users (default: 128)')
+    .option('--max-sse-connections-per-user <n>', 'maximum open SSE responses per user (default: 2)')
+    .option('--sse-buffer-bytes <n>', 'maximum queued bytes per slow SSE response (default: 1048576)')
     .addHelpText('after', '\nExamples:\n  dsh server --port 8080\n  dsh server --host 0.0.0.0 --data-dir /srv/dsh-data\n')
 }
 
@@ -56,6 +68,13 @@ export function apply(ctx: Context): void {
     if (options.maxConcurrent !== undefined && !/^\d+$/.test(options.maxConcurrent)) program.error('error: --max-concurrent must be a positive number')
     const maxConcurrentTurns = options.maxConcurrent === undefined ? 8 : Number(options.maxConcurrent)
     if (!Number.isSafeInteger(maxConcurrentTurns) || maxConcurrentTurns < 1) program.error('error: --max-concurrent must be at least 1')
+    const maxSseConnections = options.maxSseConnections === undefined ? 128 : Number(options.maxSseConnections)
+    const maxSseConnectionsPerUser = options.maxSseConnectionsPerUser === undefined ? 2 : Number(options.maxSseConnectionsPerUser)
+    const sseClientBufferBytes = options.sseBufferBytes === undefined ? 1048576 : Number(options.sseBufferBytes)
+    if (!Number.isSafeInteger(maxSseConnections) || maxSseConnections < 1) program.error('error: --max-sse-connections must be at least 1')
+    if (!Number.isSafeInteger(maxSseConnectionsPerUser) || maxSseConnectionsPerUser < 1) program.error('error: --max-sse-connections-per-user must be at least 1')
+    if (maxSseConnectionsPerUser > maxSseConnections) program.error('error: --max-sse-connections-per-user cannot exceed --max-sse-connections')
+    if (!Number.isSafeInteger(sseClientBufferBytes) || sseClientBufferBytes < 1) program.error('error: --sse-buffer-bytes must be at least 1')
     const dataDir = options.dataDir === undefined ? undefined : resolve(options.dataDir)
     ctx.provide(SERVER_STARTUP_SERVICE, {
       host,
@@ -63,6 +82,9 @@ export function apply(ctx: Context): void {
       ...dataDir === undefined ? {} : { dataDir },
       sessionsDir: resolve(dataDir ?? dshHomePath('server-data'), 'sessions'),
       maxConcurrentTurns,
+      maxSseConnections,
+      maxSseConnectionsPerUser,
+      sseClientBufferBytes,
     })
   })
   parseCmdline(ctx, program)

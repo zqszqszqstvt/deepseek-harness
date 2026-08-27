@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { ApiProxy, ClientResponse, RpcReceipt } from '@deepseek-ai/dsh-host-apiproxy'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as Server from '../src/index.ts'
@@ -30,12 +31,16 @@ function sessionIdFor(userId: string): string {
 async function start(respond: (message: ClientResponse) => Promise<RpcReceipt>): Promise<number> {
   dataDir = await mkdtemp(join(tmpdir(), 'dsh-server-approval-'))
   context = new Context()
+  await context.plugin(SessionStore)
   const api = {
     sessions: {
-      create: async (request: { rpcId: string }) => ({
-        rpcId: request.rpcId,
-        result: { ok: true as const, value: {} },
-      }),
+      create: async (request: { rpcId: string; payload: { cwd: string; sessionId: string } }) => {
+        if (context?.sessions.get(SessionId(request.payload.sessionId)) !== undefined) {
+          return { rpcId: request.rpcId, result: { ok: false as const, error: { code: 'session-conflict', message: 'exists', details: {} } } }
+        }
+        context?.sessions.create(SessionId(request.payload.sessionId), { meta: { cwd: request.payload.cwd } })
+        return { rpcId: request.rpcId, result: { ok: true as const, value: {} } }
+      },
     },
     respond,
   } as unknown as ApiProxy
@@ -45,9 +50,15 @@ async function start(respond: (message: ClientResponse) => Promise<RpcReceipt>):
     dataDir,
     sessionsDir: join(dataDir, 'sessions'),
     maxConcurrentTurns: 2,
+    maxSseConnections: 8,
+    maxSseConnectionsPerUser: 2,
+    sseClientBufferBytes: 64 * 1024,
   } satisfies ServerStartupValues)
   await context.plugin(WebServer, { host: '127.0.0.1', port: 0 })
-  await context.plugin(Server, { host: '127.0.0.1', port: 0, dataDir, maxConcurrentTurns: 2 })
+  await context.plugin(Server, {
+    host: '127.0.0.1', port: 0, dataDir, maxConcurrentTurns: 2,
+    maxSseConnections: 8, maxSseConnectionsPerUser: 2, sseClientBufferBytes: 64 * 1024,
+  })
   return context.webServer.port
 }
 

@@ -3,17 +3,18 @@ import { mkdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import type { ApiProxy, MuxFrame } from '@deepseek-ai/dsh-host-apiproxy'
+import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { ServerStartupValues } from './startup.ts'
+import { ServerSseMux } from './sse-mux.ts'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-apiproxy'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 
 export const name = 'server'
-export const inject = ['webServer', 'apiProxy', 'agents', 'serverStartup']
+export const inject = ['webServer', 'apiProxy', 'agents', 'sessions', 'serverStartup']
 
 const MAX_BODY_BYTES = 1024 * 1024
 
@@ -86,21 +87,46 @@ function sendResult(res: ServerResponse, result: { ok: boolean; [key: string]: u
   json(res, result.ok ? 200 : 400, result)
 }
 
-async function eventsFor(api: ApiProxy, sessionId: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const controller = new AbortController()
-  req.on('close', () => controller.abort())
-  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
-  res.write(': connected\n\n')
-  try {
-    for await (const frame of api.events.mux({ rpcId: RpcId(randomUUID()), payload: {} }, controller.signal)) {
-      const payload = frame.payload as MuxFrame
-      if ('sessionId' in payload && payload.sessionId !== sessionId) continue
-      res.write(`data: ${JSON.stringify(frame)}\n\n`)
+async function writeSse(res: ServerResponse, chunk: string | Buffer): Promise<boolean> {
+  if (res.destroyed || res.writableEnded) return false
+  if (res.write(chunk)) return true
+  await new Promise<void>((resolve) => {
+    const done = (): void => {
+      res.off('drain', done)
+      res.off('close', done)
+      resolve()
     }
-  } catch (error) {
-    if (!controller.signal.aborted) res.write(`data: ${JSON.stringify({ type: 'error', message: String(error) })}\n\n`)
+    res.once('drain', done)
+    res.once('close', done)
+  })
+  return !res.destroyed
+}
+
+async function eventsFor(
+  mux: ServerSseMux,
+  state: UserState,
+  lastSeq: number,
+  res: ServerResponse,
+): Promise<void> {
+  const registered = mux.register(state.userId, state.sessionId, lastSeq, () => { res.destroy() })
+  if (!registered.ok) {
+    json(res, registered.status, { ok: false, error: registered.error })
+    return
+  }
+  const { client } = registered
+  const onClose = (): void => { client.close('disconnect') }
+  res.once('close', onClose)
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+  try {
+    if (!await writeSse(res, ': connected\n\n')) return
+    while (true) {
+      const frame = await client.take()
+      if (frame === undefined || !await writeSse(res, frame)) return
+    }
   } finally {
-    if (!res.writableEnded) res.end()
+    res.off('close', onClose)
+    client.close('disconnect')
+    if (!res.destroyed && !res.writableEnded) res.end()
   }
 }
 
@@ -114,6 +140,12 @@ export interface Config {
   dataDir?: string
   /** Maximum user turns executing concurrently before later requests queue. */
   maxConcurrentTurns: number
+  /** Maximum open Server SSE responses across all users. */
+  maxSseConnections: number
+  /** Maximum open Server SSE responses for one user. */
+  maxSseConnectionsPerUser: number
+  /** Maximum encoded bytes waiting behind one slow SSE response. */
+  sseClientBufferBytes: number
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -121,6 +153,19 @@ export function apply(ctx: Context, config: Config): void {
   const root = resolve(config.dataDir ?? startup.dataDir ?? dshHomePath('server-data'))
   const active = new Map<string, Promise<void>>()
   const limit = config.maxConcurrentTurns ?? startup.maxConcurrentTurns
+  const { maxSseConnections, maxSseConnectionsPerUser, sseClientBufferBytes } = config
+  for (const [field, value] of Object.entries({ maxSseConnections, maxSseConnectionsPerUser, sseClientBufferBytes })) {
+    if (!Number.isSafeInteger(value) || value < 1) throw new Error(`server: ${field} must be a positive safe integer`)
+  }
+  if (maxSseConnectionsPerUser > maxSseConnections) {
+    throw new Error('server: maxSseConnectionsPerUser cannot exceed maxSseConnections')
+  }
+  const sseMux = new ServerSseMux(ctx.apiProxy, {
+    maxConnections: maxSseConnections,
+    maxConnectionsPerUser: maxSseConnectionsPerUser,
+    clientBufferBytes: sseClientBufferBytes,
+  })
+  ctx.on('session/disposed', (session) => { sseMux.dropSession(session.id) })
   let running = 0
   const queue: ((release: () => void) => void)[] = []
   const makeRelease = (): (() => void) => {
@@ -141,13 +186,27 @@ export function apply(ctx: Context, config: Config): void {
   const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const pathname = new URL(req.url ?? '/', 'http://dsh').pathname
     if (pathname === '/healthz' && req.method === 'GET') return json(res, 200, { ok: true })
-    if (pathname === '/readyz' && req.method === 'GET') return json(res, 200, { ok: true, running, limit })
+    if (pathname === '/readyz' && req.method === 'GET') {
+      return json(res, 200, {
+        ok: true,
+        running,
+        limit,
+        sseConnections: sseMux.connections,
+        sseConnectionLimit: maxSseConnections,
+        sseMuxState: sseMux.muxState,
+      })
+    }
     const userId = userIdFrom(pathname)
     if (userId === undefined || userId.length === 0 || userId.length > 256) return json(res, 404, { ok: false, error: 'user route not found' })
     const state = userState(root, userId)
     try {
       await ensureUser(state, ctx.apiProxy)
-      if (pathname.endsWith('/events') && req.method === 'GET') return eventsFor(ctx.apiProxy, state.sessionId, req, res)
+      if (pathname.endsWith('/events') && req.method === 'GET') {
+        const session = ctx.sessions.get(state.sessionId)
+        if (session === undefined) throw new Error(`session "${state.sessionId}" is unavailable`)
+        await eventsFor(sseMux, state, session.seq - 1, res)
+        return
+      }
       const approvalId = approvalIdFrom(pathname)
       if (approvalId !== undefined && req.method === 'POST') {
         const parsedBody = await readJson(req)
@@ -250,6 +309,11 @@ export function apply(ctx: Context, config: Config): void {
   const dispose = ctx.webServer.register({ kind: 'prefix', path: '/v1', handler: route })
   const disposeHealth = ctx.webServer.register({ kind: 'exact', path: '/healthz', handler: route })
   const disposeReady = ctx.webServer.register({ kind: 'exact', path: '/readyz', handler: route })
-  ctx.effect(() => () => { dispose(); disposeHealth(); disposeReady() })
+  ctx.effect(() => async () => {
+    dispose()
+    disposeHealth()
+    disposeReady()
+    await sseMux.dispose()
+  })
   console.log(`dsh server: http://${ctx.webServer.host}:${String(ctx.webServer.port)}`)
 }

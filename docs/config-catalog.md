@@ -1719,7 +1719,7 @@ Source: [`packages/sdk/server/src/index.ts:25`](../packages/sdk/server/src/index
 
 ## `@deepseek-ai/dsh-server`
 
-Requires: `webServer` · `apiProxy` · `agents` · `serverStartup`
+Requires: `webServer` · `apiProxy` · `agents` · `sessions` · `serverStartup`
 
 ```ts config-catalog
 /** Multi-user HTTP Server runtime config resolved by the startup plugin and Loader. */
@@ -1732,10 +1732,16 @@ export interface Config {
   dataDir?: string
   /** Maximum user turns executing concurrently before later requests queue. */
   maxConcurrentTurns: number
+  /** Maximum open Server SSE responses across all users. */
+  maxSseConnections: number
+  /** Maximum open Server SSE responses for one user. */
+  maxSseConnectionsPerUser: number
+  /** Maximum encoded bytes waiting behind one slow SSE response. */
+  sseClientBufferBytes: number
 }
 ```
 
-Source: [`packages/bundle/server/src/index.ts:108`](../packages/bundle/server/src/index.ts)
+Source: [`packages/bundle/server/src/index.ts:134`](../packages/bundle/server/src/index.ts)
 
 <a id="deepseek-aidsh-session-persistence-jsonl"></a>
 

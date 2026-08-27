@@ -41,6 +41,9 @@
         port: !!js ctx.serverStartup.port ?? 3080
         dataDir: !!js ctx.serverStartup.dataDir
         maxConcurrentTurns: !!js ctx.serverStartup.maxConcurrentTurns
+        maxSseConnections: !!js ctx.serverStartup.maxSseConnections
+        maxSseConnectionsPerUser: !!js ctx.serverStartup.maxSseConnectionsPerUser
+        sseClientBufferBytes: !!js ctx.serverStartup.sseClientBufferBytes
 
 - id: session-persistence-jsonl
   disabled: true

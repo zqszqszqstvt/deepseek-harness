@@ -29,6 +29,9 @@ describe('server session persistence', () => {
     const startup: ServerStartupValues = {
       sessionsDir,
       maxConcurrentTurns: 8,
+      maxSseConnections: 128,
+      maxSseConnectionsPerUser: 2,
+      sseClientBufferBytes: 1024 * 1024,
     }
     ctx.provide('serverStartup', startup)
     await fiber

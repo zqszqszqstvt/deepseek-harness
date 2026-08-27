@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { AgentStatus } from '@deepseek-ai/dsh-agent'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as Server from '../src/index.ts'
@@ -61,6 +62,7 @@ async function start(limit: number): Promise<{
 }> {
   dataDir = await mkdtemp(join(tmpdir(), 'dsh-server-turns-'))
   context = new Context()
+  await context.plugin(SessionStore)
   const agents = new Map<string, ControlledAgent>()
   const created: string[] = []
   const prompts: PromptCall[] = []
@@ -68,6 +70,9 @@ async function start(limit: number): Promise<{
     sessions: {
       create: async (request: { rpcId: string; payload: { sessionId: string } }) => {
         created.push(request.payload.sessionId)
+        if (context?.sessions.get(SessionId(request.payload.sessionId)) === undefined) {
+          context?.sessions.create(SessionId(request.payload.sessionId), { meta: { cwd: dataDir as string } })
+        }
         if (!agents.has(request.payload.sessionId)) agents.set(request.payload.sessionId, new ControlledAgent())
         return { rpcId: request.rpcId, result: { ok: true as const, value: {} } }
       },
@@ -90,9 +95,15 @@ async function start(limit: number): Promise<{
     dataDir,
     sessionsDir: join(dataDir, 'sessions'),
     maxConcurrentTurns: limit,
+    maxSseConnections: 8,
+    maxSseConnectionsPerUser: 2,
+    sseClientBufferBytes: 64 * 1024,
   } satisfies ServerStartupValues)
   await context.plugin(WebServer, { host: '127.0.0.1', port: 0 })
-  await context.plugin(Server, { host: '127.0.0.1', port: 0, dataDir, maxConcurrentTurns: limit })
+  await context.plugin(Server, {
+    host: '127.0.0.1', port: 0, dataDir, maxConcurrentTurns: limit,
+    maxSseConnections: 8, maxSseConnectionsPerUser: 2, sseClientBufferBytes: 64 * 1024,
+  })
   return { port: context.webServer.port, agents, created, prompts }
 }
 
@@ -122,7 +133,10 @@ describe('server turn concurrency', () => {
     await vi.waitFor(() => expect(harness.prompts).toHaveLength(1))
     await expect(getJson(harness.port, '/readyz')).resolves.toEqual({
       status: 200,
-      body: { ok: true, running: 1, limit: 1 },
+      body: {
+        ok: true, running: 1, limit: 1,
+        sseConnections: 0, sseConnectionLimit: 8, sseMuxState: 'idle',
+      },
     })
     const bob = postTurn(harness.port, 'bob', 'bob work')
     await vi.waitFor(() => expect(harness.created).toHaveLength(2))
@@ -137,7 +151,10 @@ describe('server turn concurrency', () => {
     await expect(bob).resolves.toEqual({ status: 200, body: { ok: true, value: { accepted: true } } })
     await expect(getJson(harness.port, '/readyz')).resolves.toEqual({
       status: 200,
-      body: { ok: true, running: 0, limit: 1 },
+      body: {
+        ok: true, running: 0, limit: 1,
+        sseConnections: 0, sseConnectionLimit: 8, sseMuxState: 'idle',
+      },
     })
   })
 

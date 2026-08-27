@@ -1,4 +1,5 @@
 import { request } from 'node:http'
+import type { ClientRequest, IncomingMessage } from 'node:http'
 
 interface JsonResponse { status: number; body: unknown }
 
@@ -32,4 +33,50 @@ export function getJson(port: number, path: string): Promise<JsonResponse> {
 /** Send JSON to one test server endpoint over Node's unrestricted HTTP client. */
 export function postJson(port: number, path: string, body: unknown): Promise<JsonResponse> {
   return requestJson(port, path, 'POST', body)
+}
+
+/** One persistent SSE response controlled by a test. */
+export interface SseProbe {
+  readonly status: number
+  readonly text: string
+  readonly ended: Promise<void>
+  /** Wait until the accumulated response text satisfies one assertion. */
+  waitFor(assertion: (text: string) => void): Promise<void>
+  /** Destroy the client request and release the server response. */
+  close(): void
+}
+
+/** Open one Server SSE response without buffering it to completion. */
+export function openSse(port: number, path: string): Promise<SseProbe> {
+  return new Promise((resolve, reject) => {
+    const req: ClientRequest = request({ host: '127.0.0.1', port, path, method: 'GET' }, (res: IncomingMessage) => {
+      let text = ''
+      let resolveEnded!: () => void
+      const ended = new Promise<void>((resolveEnd) => { resolveEnded = resolveEnd })
+      res.setEncoding('utf8')
+      res.on('data', (chunk: string) => { text += chunk })
+      res.once('end', resolveEnded)
+      res.once('close', resolveEnded)
+      resolve({
+        status: res.statusCode ?? 0,
+        get text() { return text },
+        ended,
+        waitFor: async (assertion) => {
+          const deadline = Date.now() + 2_000
+          while (true) {
+            try {
+              assertion(text)
+              return
+            } catch (error) {
+              if (Date.now() >= deadline) throw error
+              await new Promise(resolveWait => setTimeout(resolveWait, 10))
+            }
+          }
+        },
+        close: () => { req.destroy() },
+      })
+    })
+    req.once('error', reject)
+    req.end()
+  })
 }
