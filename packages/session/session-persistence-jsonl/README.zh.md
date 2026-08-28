@@ -31,11 +31,13 @@ JSONL 持久会话存储后端：`SessionPersistence` 的一个具体实现（`d
 
 `locate(meta)` 返回已解析项目/会话目录内固定 transcript 的 `{ kind: 'jsonl', path }`。它不执行文件系统 I/O：可以在目录或文件存在前返回目标，现有文件也只包含最近一次 flush 完成的前缀。
 
+`relocateStoredSessionCwd(id, cwd)` 是供部署适配器在已配置根目录内移动单个冷会话的操作，会保留会话 id 和事件日志。调用方必须独占该会话并验证迁移权限。该操作拒绝活动会话或已占用目标，先替换存储的 header 再移动会话目录，并可在中断后通过重试完成移动。
+
 ## 物理编码
 
 默认产物是独立 [Zstandard frame](../../../.agents/notes/implemented/architecture/2026-07-19-zstandard-jsonl-session-logs.zh.md) 的标准拼接：一个仅包含 header 行的带 checksum frame，后跟每个持久 append 批次一个带 checksum frame。后端使用 Node 内置 Zstandard API 和默认压缩级别，不提供级别开关。列表只读取并验证 header frame。`compression: 'none'` 在原始表示中保留相同逻辑行。
 
-一个根只属于一种编码。启动发现和定向查找会拒绝相反 suffix，错误会命名不兼容产物，并指示调用方选择匹配 mode 或独立根。平铺 `<project>/<id>.jsonl*` 产物也会被拒绝，而不是忽略。不提供迁移、混合根回退或双写。
+一个根只属于一种编码。启动发现和定向查找会拒绝相反 suffix，错误会命名不兼容产物，并指示调用方选择匹配 mode 或独立根。平铺 `<project>/<id>.jsonl*` 产物也会被拒绝，而不是忽略。不提供编码迁移、混合根回退或双写。
 
 ## 持久性与崩溃语义
 

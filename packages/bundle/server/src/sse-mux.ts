@@ -14,6 +14,8 @@ interface CachedSessionFrames {
   jobs?: Buffer
 }
 
+const PUBLIC_STREAM_ERROR = 'event stream failed'
+
 /** One bounded single-consumer frame queue owned by an HTTP response. */
 export class SseClient {
   private readonly frames: Buffer[] = []
@@ -103,7 +105,11 @@ export class ServerSseMux {
   private done: Promise<void> = Promise.resolve()
   private connectionCount = 0
 
-  constructor(private readonly api: ApiProxy, private readonly limits: SseMuxLimits) {}
+  constructor(
+    private readonly api: ApiProxy,
+    private readonly limits: SseMuxLimits,
+    private readonly reportError: (error: unknown) => void,
+  ) {}
 
   /** Number of currently registered SSE responses. */
   get connections(): number {
@@ -208,8 +214,15 @@ export class ServerSseMux {
     if (payload.type === 'session/subscribed') return true
     const encoded = encode(frame)
     if (payload.type === 'stream/error') {
+      this.reportError(payload.error)
       this.state = 'failed'
-      this.pushAll(encoded)
+      this.pushAll(encode({
+        rpcId: frame.rpcId,
+        payload: {
+          type: 'stream/error',
+          error: { code: 'internal', message: PUBLIC_STREAM_ERROR, details: {} },
+        },
+      }))
       return false
     }
     this.remember(frame, encoded)
@@ -234,12 +247,13 @@ export class ServerSseMux {
   }
 
   private fail(error: unknown): void {
+    this.reportError(error)
     this.state = 'failed'
     this.pushAll(encode({
       rpcId: RpcId(randomUUID()),
       payload: {
         type: 'stream/error',
-        error: { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} },
+        error: { code: 'internal', message: PUBLIC_STREAM_ERROR, details: {} },
       },
     }))
   }

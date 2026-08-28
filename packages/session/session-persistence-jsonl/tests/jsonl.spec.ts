@@ -327,6 +327,65 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
     expect(statRace.reads).toBe(4)
   })
 
+  it('relocates a cold session cwd without changing its identity or events', async () => {
+    const oldCwd = join(root, 'old-data', 'users', 'user-key', 'workspace')
+    const newCwd = join(root, 'new-data', 'users', 'user-key', 'workspace')
+    const m = meta('relocated-cwd', oldCwd)
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const persistence = ctx.sessionPersistence as JsonlSessionPersistence
+
+    await expect(persistence.relocateStoredSessionCwd(m.id, newCwd)).resolves.toBe('relocated')
+    await expect(stat(rawLogPath(root, oldCwd, m.id))).rejects.toThrow()
+    expect((await stat(rawLogPath(root, newCwd, m.id))).isFile()).toBe(true)
+    const loaded = await persistence.load(m.id)
+    expect(loaded.meta).toMatchObject({ ...m, cwd: newCwd })
+    expect(loaded.events).toEqual(oneTurnLog())
+    await expect(persistence.relocateStoredSessionCwd(m.id, newCwd)).resolves.toBe('unchanged')
+  })
+
+  it('rejects cwd relocation while the session is live', async () => {
+    const session = ctx.sessions.create(SessionId('live-relocation'), { meta: { cwd: '/work' } })
+    const persistence = ctx.sessionPersistence as JsonlSessionPersistence
+    await expect(persistence.relocateStoredSessionCwd(session.id, '/moved')).rejects.toThrow(/live session/)
+  })
+
+  it('relocates the default Zstandard artifact without changing its events', async () => {
+    const zstdRoot = await freshRoot()
+    const zstdCtx = new Context()
+    try {
+      await zstdCtx.plugin(SessionStore)
+      await zstdCtx.plugin(JsonlSessionPersistence, { root: zstdRoot })
+      const oldCwd = join(zstdRoot, 'old', 'users', 'user-key', 'workspace')
+      const newCwd = join(zstdRoot, 'new', 'users', 'user-key', 'workspace')
+      const m = meta('relocated-zstd', oldCwd)
+      await zstdCtx.sessionPersistence.create(m)
+      await zstdCtx.sessionPersistence.append(m.id, oneTurnLog())
+      const persistence = zstdCtx.sessionPersistence as JsonlSessionPersistence
+
+      await expect(persistence.relocateStoredSessionCwd(m.id, newCwd)).resolves.toBe('relocated')
+      const loaded = await persistence.load(m.id)
+      expect(loaded.meta).toMatchObject({ ...m, cwd: newCwd })
+      expect(loaded.events).toEqual(oneTurnLog())
+    } finally {
+      await zstdCtx.fiber.dispose()
+    }
+  })
+
+  it('completes a relocation interrupted after header replacement', async () => {
+    const oldCwd = join(root, 'old-interrupted', 'users', 'user-key', 'workspace')
+    const newCwd = join(root, 'new-interrupted', 'users', 'user-key', 'workspace')
+    const m = meta('relocated-interrupted', oldCwd)
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    await rewriteHeader(rawLogPath(root, oldCwd, m.id), (header) => { header['cwd'] = newCwd })
+    const persistence = ctx.sessionPersistence as JsonlSessionPersistence
+
+    await expect(persistence.relocateStoredSessionCwd(m.id, newCwd)).resolves.toBe('relocated')
+    await expect(stat(rawLogPath(root, oldCwd, m.id))).rejects.toThrow()
+    expect((await persistence.load(m.id)).meta.cwd).toBe(newCwd)
+  })
+
   it('keeps the same location on resume and gives a fork its own location', async () => {
     const parent = meta('location-parent', '/work')
     const parentLocation = ctx.sessionPersistence.locate(parent)

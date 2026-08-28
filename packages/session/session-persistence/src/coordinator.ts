@@ -679,6 +679,20 @@ export class PersistenceCoordinator<TornMarker = unknown> {
     return this.serialize(id, () => this.appendCore(id, batch))
   }
 
+  /**
+   * Forget coordinator state before an owning backend relocates a cold
+   * artifact. The caller must exclusively own the cold identity while it
+   * performs the storage mutation; live sessions are rejected.
+   * @param id - persisted session whose backend location is about to change.
+   */
+  resetColdState(id: SessionId): void {
+    if (this.ctx.sessions.get(id) !== undefined || this.states.get(id)?.owner !== undefined) {
+      throw new Error(`cannot reset persistence state for live session "${id}"`)
+    }
+    this.preparations.invalidate(id)
+    this.states.delete(id)
+  }
+
   private async appendCore(id: SessionId, events: readonly SessionEvent[]): Promise<void> {
     // Every append route converges here: the public service, live write-behind
     // drains, and HMR seed/suffix adoption. Legacy-shape rejection stays at

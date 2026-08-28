@@ -1731,7 +1731,7 @@ export interface Config {
   /** Root for per-user workspaces and Server-owned session data. */
   dataDir?: string
   /** Maximum user turns executing concurrently before later requests queue. */
-  maxConcurrentTurns: number
+  maxConcurrentTurns?: number
   /** Maximum open Server SSE responses across all users. */
   maxSseConnections: number
   /** Maximum open Server SSE responses for one user. */
@@ -1741,7 +1741,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/bundle/server/src/index.ts:134`](../packages/bundle/server/src/index.ts)
+Source: [`packages/bundle/server/src/index.ts:164`](../packages/bundle/server/src/index.ts)
 
 <a id="deepseek-aidsh-session-persistence-jsonl"></a>
 

@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import type { ServerStartupValues } from './startup.ts'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { ServerSseMux } from './sse-mux.ts'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-apiproxy'
@@ -17,6 +17,7 @@ export const name = 'server'
 export const inject = ['webServer', 'apiProxy', 'agents', 'sessions', 'serverStartup']
 
 const MAX_BODY_BYTES = 1024 * 1024
+const PUBLIC_SERVER_ERROR = 'server request failed'
 
 interface UserState { userId: string; key: string; cwd: string; sessionId: ReturnType<typeof SessionId> }
 interface TurnBody { message?: unknown; mode?: unknown }
@@ -27,8 +28,25 @@ function userState(root: string, userId: string): UserState {
   return { userId, key, cwd: join(root, 'users', key, 'workspace'), sessionId: SessionId(`mu_${key.slice(0, 40)}`) }
 }
 
-async function ensureUser(state: UserState, api: ApiProxy): Promise<void> {
+function isServerWorkspace(cwd: string | undefined, key: string): boolean {
+  if (cwd === undefined) return false
+  const userDir = dirname(resolve(cwd))
+  return basename(resolve(cwd)) === 'workspace'
+    && basename(userDir) === key
+    && basename(dirname(userDir)) === 'users'
+}
+
+async function ensureUser(state: UserState, api: ApiProxy, persistence: unknown): Promise<void> {
   await mkdir(state.cwd, { recursive: true })
+  if (persistence instanceof JsonlSessionPersistence) {
+    const stored = await persistence.readRaw(state.sessionId)
+    if (stored !== undefined && stored.meta.cwd !== state.cwd) {
+      if (!isServerWorkspace(stored.meta.cwd, state.key)) {
+        throw new Error(`server session "${state.sessionId}" belongs to unexpected cwd ${JSON.stringify(stored.meta.cwd)}`)
+      }
+      await persistence.relocateStoredSessionCwd(state.sessionId, state.cwd)
+    }
+  }
   const created = await api.sessions.create({ rpcId: RpcId(randomUUID()), payload: { cwd: state.cwd, sessionId: state.sessionId } })
   if (!created.result.ok && created.result.error.code !== 'session-conflict') {
     throw new Error(created.result.error.message)
@@ -38,7 +56,9 @@ async function ensureUser(state: UserState, api: ApiProxy): Promise<void> {
 async function readJson(req: IncomingMessage): Promise<unknown> {
   let size = 0
   const chunks: Buffer[] = []
-  for await (const chunk of req) {
+  for await (const rawChunk of req) {
+    const chunk: unknown = rawChunk
+    if (typeof chunk !== 'string' && !Buffer.isBuffer(chunk)) throw new Error('request body contains an invalid chunk')
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     size += buffer.length
     if (size > MAX_BODY_BYTES) throw new Error('request body too large')
@@ -83,8 +103,18 @@ function questionRpcIdFrom(pathname: string): string | undefined {
   }
 }
 
-function sendResult(res: ServerResponse, result: { ok: boolean; [key: string]: unknown }): void {
-  json(res, result.ok ? 200 : 400, result)
+function sendResult(ctx: Context, res: ServerResponse, operation: string, result: { ok: boolean; [key: string]: unknown }): void {
+  if (result.ok) {
+    json(res, 200, result)
+    return
+  }
+  ctx.logger.error(`dsh server ${operation} failed: %o`, result)
+  json(res, 500, { ok: false, error: PUBLIC_SERVER_ERROR })
+}
+
+function reportRequestError(ctx: Context, pathname: string, error: unknown): void {
+  const cause = error instanceof Error ? error : new Error(String(error))
+  ctx.logger.error(new Error(`dsh server request failed for ${pathname}`, { cause }))
 }
 
 async function writeSse(res: ServerResponse, chunk: string | Buffer): Promise<boolean> {
@@ -139,7 +169,7 @@ export interface Config {
   /** Root for per-user workspaces and Server-owned session data. */
   dataDir?: string
   /** Maximum user turns executing concurrently before later requests queue. */
-  maxConcurrentTurns: number
+  maxConcurrentTurns?: number
   /** Maximum open Server SSE responses across all users. */
   maxSseConnections: number
   /** Maximum open Server SSE responses for one user. */
@@ -149,7 +179,7 @@ export interface Config {
 }
 
 export function apply(ctx: Context, config: Config): void {
-  const startup = ctx.serverStartup as ServerStartupValues
+  const startup = ctx.serverStartup
   const root = resolve(config.dataDir ?? startup.dataDir ?? dshHomePath('server-data'))
   const active = new Map<string, Promise<void>>()
   const limit = config.maxConcurrentTurns ?? startup.maxConcurrentTurns
@@ -164,8 +194,18 @@ export function apply(ctx: Context, config: Config): void {
     maxConnections: maxSseConnections,
     maxConnectionsPerUser: maxSseConnectionsPerUser,
     clientBufferBytes: sseClientBufferBytes,
-  })
+  }, (error) => { reportRequestError(ctx, '/v1/users/*/events', error) })
   ctx.on('session/disposed', (session) => { sseMux.dropSession(session.id) })
+  const userInitialization = new Map<string, Promise<void>>()
+  const initializeUser = (state: UserState): Promise<void> => {
+    const pending = userInitialization.get(state.userId)
+    if (pending !== undefined) return pending
+    const operation = ensureUser(state, ctx.apiProxy, ctx.get('sessionPersistence')).finally(() => {
+      if (userInitialization.get(state.userId) === operation) userInitialization.delete(state.userId)
+    })
+    userInitialization.set(state.userId, operation)
+    return operation
+  }
   let running = 0
   const queue: ((release: () => void) => void)[] = []
   const makeRelease = (): (() => void) => {
@@ -185,9 +225,12 @@ export function apply(ctx: Context, config: Config): void {
   }
   const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const pathname = new URL(req.url ?? '/', 'http://dsh').pathname
-    if (pathname === '/healthz' && req.method === 'GET') return json(res, 200, { ok: true })
+    if (pathname === '/healthz' && req.method === 'GET') {
+      json(res, 200, { ok: true })
+      return
+    }
     if (pathname === '/readyz' && req.method === 'GET') {
-      return json(res, 200, {
+      json(res, 200, {
         ok: true,
         running,
         limit,
@@ -195,12 +238,16 @@ export function apply(ctx: Context, config: Config): void {
         sseConnectionLimit: maxSseConnections,
         sseMuxState: sseMux.muxState,
       })
+      return
     }
     const userId = userIdFrom(pathname)
-    if (userId === undefined || userId.length === 0 || userId.length > 256) return json(res, 404, { ok: false, error: 'user route not found' })
+    if (userId === undefined || userId.length === 0 || userId.length > 256) {
+      json(res, 404, { ok: false, error: 'user route not found' })
+      return
+    }
     const state = userState(root, userId)
     try {
-      await ensureUser(state, ctx.apiProxy)
+      await initializeUser(state)
       if (pathname.endsWith('/events') && req.method === 'GET') {
         const session = ctx.sessions.get(state.sessionId)
         if (session === undefined) throw new Error(`session "${state.sessionId}" is unavailable`)
@@ -211,17 +258,21 @@ export function apply(ctx: Context, config: Config): void {
       if (approvalId !== undefined && req.method === 'POST') {
         const parsedBody = await readJson(req)
         if (typeof parsedBody !== 'object' || parsedBody === null || Array.isArray(parsedBody)) {
-          return json(res, 400, { ok: false, error: 'request body must be a JSON object' })
+          json(res, 400, { ok: false, error: 'request body must be a JSON object' })
+          return
         }
         const body = parsedBody as ApprovalBody
         if (approvalId.length === 0 || approvalId.length > 512) {
-          return json(res, 400, { ok: false, error: 'approvalId must be a non-empty string' })
+          json(res, 400, { ok: false, error: 'approvalId must be a non-empty string' })
+          return
         }
         if (typeof body.rpcId !== 'string' || body.rpcId.length === 0 || body.rpcId.length > 512) {
-          return json(res, 400, { ok: false, error: 'rpcId must be a non-empty string' })
+          json(res, 400, { ok: false, error: 'rpcId must be a non-empty string' })
+          return
         }
         if (body.outcome !== 'allowed-once' && body.outcome !== 'rejected') {
-          return json(res, 400, { ok: false, error: 'outcome must be allowed-once or rejected' })
+          json(res, 400, { ok: false, error: 'outcome must be allowed-once or rejected' })
+          return
         }
         const receipt = await ctx.apiProxy.respond({
           type: 'client-response',
@@ -231,16 +282,19 @@ export function apply(ctx: Context, config: Config): void {
             value: { sessionId: state.sessionId, approvalId, outcome: body.outcome },
           },
         })
-        return json(res, 200, receipt)
+        json(res, 200, receipt)
+        return
       }
       const questionRpcId = questionRpcIdFrom(pathname)
       if (questionRpcId !== undefined && req.method === 'POST') {
         const answer = await readJson(req)
         if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {
-          return json(res, 400, { ok: false, error: 'request body must be a JSON object' })
+          json(res, 400, { ok: false, error: 'request body must be a JSON object' })
+          return
         }
         if (questionRpcId.length === 0 || questionRpcId.length > 512) {
-          return json(res, 400, { ok: false, error: 'rpcId must be a non-empty string' })
+          json(res, 400, { ok: false, error: 'rpcId must be a non-empty string' })
+          return
         }
         const receipt = await ctx.apiProxy.respond({
           type: 'client-response',
@@ -250,19 +304,25 @@ export function apply(ctx: Context, config: Config): void {
             value: { sessionId: state.sessionId, answer },
           },
         })
-        return json(res, 200, receipt)
+        json(res, 200, receipt)
+        return
       }
       if (pathname.endsWith('/history') && req.method === 'GET') {
         const result = await ctx.apiProxy.sessions.history({ rpcId: RpcId(randomUUID()), payload: { sessionId: state.sessionId } })
-        return sendResult(res, result.result)
+        sendResult(ctx, res, 'history', result.result)
+        return
       }
       if (pathname.endsWith('/turns') && req.method === 'DELETE') {
         const result = await ctx.apiProxy.sessions.cancel({ rpcId: RpcId(randomUUID()), payload: { sessionId: state.sessionId } })
-        return sendResult(res, result.result)
+        sendResult(ctx, res, 'cancel', result.result)
+        return
       }
       if (pathname.endsWith('/turns') && req.method === 'POST') {
         const body = await readJson(req) as TurnBody
-        if (typeof body.message !== 'string' || body.message.length === 0) return json(res, 400, { ok: false, error: 'message must be a non-empty string' })
+        if (typeof body.message !== 'string' || body.message.length === 0) {
+          json(res, 400, { ok: false, error: 'message must be a non-empty string' })
+          return
+        }
         const message = body.message
         const mode = body.mode === 'steer' ? 'steer' : 'queue'
         const agent = ctx.agents.get(state.sessionId)
@@ -271,7 +331,8 @@ export function apply(ctx: Context, config: Config): void {
           const result = await ctx.apiProxy.sessions.prompt({ rpcId: RpcId(randomUUID()), payload: {
             sessionId: state.sessionId, mode, content: [{ type: 'text', text: message }],
           } })
-          return sendResult(res, result.result)
+          sendResult(ctx, res, 'steer', result.result)
+          return
         }
         const previous = active.get(state.userId)
         const work = (async () => {
@@ -288,7 +349,7 @@ export function apply(ctx: Context, config: Config): void {
               sessionId: state.sessionId, mode, content: [{ type: 'text', text: message }],
             } })
             if (result.result.ok) await agent.whenIdle()
-            sendResult(res, result.result)
+            sendResult(ctx, res, 'turn', result.result)
           } finally {
             release()
           }
@@ -301,9 +362,11 @@ export function apply(ctx: Context, config: Config): void {
         }
         return
       }
-      return json(res, 404, { ok: false, error: 'user route not found' })
+      json(res, 404, { ok: false, error: 'user route not found' })
+      return
     } catch (error) {
-      json(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      reportRequestError(ctx, pathname, error)
+      json(res, 500, { ok: false, error: PUBLIC_SERVER_ERROR })
     }
   }
   const dispose = ctx.webServer.register({ kind: 'prefix', path: '/v1', handler: route })

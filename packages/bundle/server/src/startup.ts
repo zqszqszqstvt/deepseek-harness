@@ -55,7 +55,16 @@ function serverCommand(): Command {
     .option('--max-sse-connections <n>', 'maximum open SSE responses across users (default: 128)')
     .option('--max-sse-connections-per-user <n>', 'maximum open SSE responses per user (default: 2)')
     .option('--sse-buffer-bytes <n>', 'maximum queued bytes per slow SSE response (default: 1048576)')
-    .addHelpText('after', '\nExamples:\n  dsh server --port 8080\n  dsh server --host 0.0.0.0 --data-dir /srv/dsh-data\n')
+    .addHelpText('after', `
+Deployment contract:
+  dsh server does not authenticate clients. Keep it on loopback or a trusted
+  backend network. The authenticating backend must derive each URL userId from
+  the authenticated principal; never accept a caller-controlled userId.
+
+Examples:
+  dsh server --port 13080
+  dsh server --host 0.0.0.0 --port 13080 --data-dir /srv/dsh-data  # trusted backend network only
+`)
 }
 
 export function apply(ctx: Context): void {

@@ -9,7 +9,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { readdirSync } from 'node:fs'
-import { open, mkdir, readFile, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
+import { open, mkdir, readFile, readdir, realpath, link, rename, rm, stat, truncate } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -30,7 +30,7 @@ import {
 import {
   compressZstdFrame, createZstdFrameDecoder, decompressZstdFrame, decompressZstdPrefix, scanZstdFrames,
 } from './zstd.ts'
-import { ensureDurableDirectoryWin32, publishNewFileWin32 } from './win32.ts'
+import { ensureDurableDirectoryWin32, publishNewFileWin32, replaceFileWin32 } from './win32.ts'
 
 export type { JsonlCompression } from './format.ts'
 
@@ -279,6 +279,58 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
     // The logical artifact name is `session.jsonl` regardless of the physical
     // encoding suffix (`.jsonl.zstd` marks compression only).
     return { meta, filename: 'session.jsonl', content }
+  }
+
+  /**
+   * Relocate one cold session to a different working directory while preserving
+   * its id and event log. The session must not be attached to the in-memory
+   * store. Header replacement is committed before the session directory move;
+   * calling this method again completes an interrupted move whose header already
+   * names `cwd`.
+   * @param id - persisted session to relocate.
+   * @param cwd - new absolute working directory recorded in the header and storage path.
+   * @returns whether the session was absent, already current, or relocated.
+   * @throws when the session is live or another artifact occupies the destination.
+   */
+  async relocateStoredSessionCwd(
+    id: SessionId,
+    cwd: string,
+  ): Promise<'absent' | 'unchanged' | 'relocated'> {
+    if (this.ctx.sessions.get(id) !== undefined) {
+      throw new Error(`cannot relocate live session "${id}"`)
+    }
+    const path = await this.findLog(id)
+    if (path === undefined) return 'absent'
+    const artifact = await this.readRaw(id)
+    /* v8 ignore next -- findLog found the artifact immediately before readRaw repeats discovery. */
+    if (artifact === undefined) return 'absent'
+
+    const target = logPath(this.root, cwd, id, this.compression)
+    if (artifact.meta.cwd === cwd && path === target) return 'unchanged'
+    this.coordinator.resetColdState(id)
+    const sourceDir = dirname(path)
+    const targetDir = dirname(target)
+    if (sourceDir !== targetDir && await this.exists(targetDir)) {
+      throw new Error(`cannot relocate session "${id}": destination already exists`)
+    }
+
+    if (artifact.meta.cwd !== cwd) {
+      const headerEnd = artifact.content.indexOf('\n')
+      /* v8 ignore next -- readRaw accepts only artifacts with a complete header line. */
+      if (headerEnd < 0) throw new Error('cannot relocate a header-less session log')
+      const relocatedHeader: SessionHeader = { ...artifact.meta, cwd }
+      const plaintext = JSON.stringify(toHeaderLine(relocatedHeader)) + '\n' + artifact.content.slice(headerEnd + 1)
+      const content = this.compression === 'none'
+        ? plaintext
+        : Buffer.concat([
+          await compressZstdFrame(JSON.stringify(toHeaderLine(relocatedHeader)) + '\n'),
+          await compressZstdFrame(artifact.content.slice(headerEnd + 1)),
+        ])
+      await this.replaceSyncedFile(path, content)
+    }
+
+    if (sourceDir !== targetDir) await this.moveSessionDirectory(sourceDir, targetDir)
+    return 'relocated'
   }
 
   /**
@@ -613,6 +665,38 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
       await handle.close()
     }
     return tmp
+  }
+
+  /** Replace one existing log after syncing its same-directory staging file. */
+  private async replaceSyncedFile(path: string, content: Buffer | string): Promise<void> {
+    const tmp = await this.writeSyncedTempFile(path, content)
+    try {
+      /* v8 ignore next -- native Windows coverage exercises this platform dispatch. */
+      if (process.platform === 'win32') await replaceFileWin32(tmp, path)
+      else {
+        await rename(tmp, path)
+        await this.syncDirPosix(dirname(path))
+      }
+    } catch (error) {
+      await rm(tmp, { force: true })
+      throw error
+    }
+  }
+
+  /** Move one session directory within the configured persistence root. */
+  private async moveSessionDirectory(source: string, target: string): Promise<void> {
+    const targetProject = dirname(target)
+    /* v8 ignore next -- native Windows coverage exercises this platform dispatch. */
+    if (process.platform === 'win32') {
+      await ensureDurableDirectoryWin32(targetProject)
+      await publishNewFileWin32(source, target)
+      return
+    }
+    await mkdir(targetProject, { recursive: true, mode: 0o700 })
+    await this.syncDirPosix(this.root)
+    await rename(source, target)
+    await this.syncDirPosix(dirname(source))
+    await this.syncDirPosix(targetProject)
   }
 
   /** Encode the header and first batch without combining their frame boundaries. */

@@ -28,6 +28,7 @@ interface Win32ErrnoException extends NodeJS.ErrnoException {
 }
 
 const MOVEFILE_WRITE_THROUGH = 0x00000008
+const MOVEFILE_REPLACE_EXISTING = 0x00000001
 const ERROR_FILE_NOT_FOUND = 2
 const ERROR_PATH_NOT_FOUND = 3
 const ERROR_ACCESS_DENIED = 5
@@ -116,6 +117,22 @@ async function assertDirectory(path: string): Promise<boolean> {
 export async function publishNewFileWin32(existing: string, replacement: string): Promise<void> {
   const api = await win32()
   const ok = api.moveFileExW(toNamespacedPath(existing), toNamespacedPath(replacement), MOVEFILE_WRITE_THROUGH)
+  if (ok === 0) throw win32Error('MoveFileExW', api.getLastError(), existing, replacement)
+}
+
+/**
+ * Replace one existing file with a synced staging file using Windows
+ * write-through rename semantics.
+ * @param existing - the synced staging path to move.
+ * @param replacement - the existing final path to replace.
+ */
+export async function replaceFileWin32(existing: string, replacement: string): Promise<void> {
+  const api = await win32()
+  const ok = api.moveFileExW(
+    toNamespacedPath(existing),
+    toNamespacedPath(replacement),
+    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+  )
   if (ok === 0) throw win32Error('MoveFileExW', api.getLastError(), existing, replacement)
 }
 

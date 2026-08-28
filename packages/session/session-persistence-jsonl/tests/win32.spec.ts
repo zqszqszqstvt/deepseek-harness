@@ -5,12 +5,13 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const MOVEFILE_WRITE_THROUGH = 0x00000008
+const MOVEFILE_REPLACE_EXISTING = 0x00000001
 const ERROR_FILE_NOT_FOUND = 2
 const ERROR_PATH_NOT_FOUND = 3
 const ERROR_ACCESS_DENIED = 5
@@ -139,6 +140,28 @@ describe('Windows durable namespace helpers', () => {
     await publishNewFileWin32(tmp, final)
     expect(existsSync(tmp)).toBe(false)
     expect(readFileSync(final, 'utf8')).toBe('content')
+  })
+
+  it('replaces an existing file with write-through MoveFileExW semantics', async () => {
+    const flags: number[] = []
+    const { replaceFileWin32 } = await importWithMove((existing, replacement, moveFlags, setLastError) => {
+      flags.push(moveFlags)
+      const from = stripNamespace(existing)
+      const to = stripNamespace(replacement)
+      if (!existsSync(from)) { setLastError(ERROR_FILE_NOT_FOUND); return 0 }
+      rmSync(to, { force: true })
+      renameSync(from, to)
+      return 1
+    })
+    const root = await tempRoot()
+    const tmp = join(root, 'log.tmp')
+    const final = join(root, 'log.jsonl')
+    await writeFile(tmp, 'new')
+    await writeFile(final, 'old')
+
+    await replaceFileWin32(tmp, final)
+    expect(flags).toEqual([MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH])
+    expect(readFileSync(final, 'utf8')).toBe('new')
   })
 
   it('maps Win32 publish failures to Node-style errno codes', async () => {

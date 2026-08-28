@@ -8,10 +8,10 @@ import { Context } from '@deepseek-ai/cordis'
 import type { ApiProxy, ClientResponse, RpcReceipt } from '@deepseek-ai/dsh-host-apiproxy'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as Server from '../src/index.ts'
 import type { ServerStartupValues } from '../src/startup.ts'
-import { postJson } from './http-testkit.ts'
+import { getJson, postJson } from './http-testkit.ts'
 
 let context: Context | undefined
 let dataDir: string | undefined
@@ -41,6 +41,17 @@ async function start(respond: (message: ClientResponse) => Promise<RpcReceipt>):
         context?.sessions.create(SessionId(request.payload.sessionId), { meta: { cwd: request.payload.cwd } })
         return { rpcId: request.rpcId, result: { ok: true as const, value: {} } }
       },
+      history: async (request: { rpcId: string }) => ({
+        rpcId: request.rpcId,
+        result: {
+          ok: false as const,
+          error: {
+            code: 'internal' as const,
+            message: 'could not read /srv/dsh-data/users/private/session.jsonl',
+            details: {},
+          },
+        },
+      }),
     },
     respond,
   } as unknown as ApiProxy
@@ -78,7 +89,12 @@ describe('server approval route', () => {
       return Promise.resolve({ accepted: true })
     })
 
-    const result = await post(port, 'alice', 'approval-1', { rpcId: 'request-1', outcome: 'allowed-once' })
+    const result: { status: number; body: unknown } = await post(
+      port,
+      'alice',
+      'approval-1',
+      { rpcId: 'request-1', outcome: 'allowed-once' },
+    )
 
     expect(result).toEqual({ status: 200, body: { accepted: true } })
     expect(seen).toEqual([{
@@ -125,6 +141,31 @@ describe('server approval route', () => {
     expect(await post(port, 'alice', 'approval-1', { rpcId: 'request-1', outcome: 'always' }))
       .toEqual({ status: 400, body: { ok: false, error: 'outcome must be allowed-once or rejected' } })
     expect(seen).toEqual([])
+  })
+
+  it('keeps thrown host paths in server logs and out of HTTP responses', async () => {
+    const port = await start(() => Promise.reject(new Error('permission denied: /srv/dsh-data/users/private')))
+    let reported: unknown
+    vi.spyOn(context!.logger, 'error').mockImplementation((value: unknown) => { reported = value })
+
+    const result = await post(port, 'alice', 'approval-1', { rpcId: 'request-1', outcome: 'allowed-once' })
+
+    expect(result).toEqual({ status: 500, body: { ok: false, error: 'server request failed' } })
+    expect(JSON.stringify(result)).not.toContain('/srv/dsh-data')
+    expect(reported).toBeInstanceOf(Error)
+    if (!(reported instanceof Error)) throw new Error('expected one logged Error')
+    expect(String(reported.cause)).toContain('/srv/dsh-data')
+  })
+
+  it('keeps ApiProxy failure details out of HTTP responses', async () => {
+    const port = await start(() => Promise.resolve({ accepted: true }))
+    const logged = vi.spyOn(context!.logger, 'error').mockImplementation(() => undefined)
+
+    const result: { status: number; body: unknown } = await getJson(port, '/v1/users/alice/history')
+
+    expect(result).toEqual({ status: 500, body: { ok: false, error: 'server request failed' } })
+    expect(JSON.stringify(result)).not.toContain('/srv/dsh-data')
+    expect(logged).toHaveBeenCalledWith('dsh server history failed: %o', expect.objectContaining({ ok: false }))
   })
 })
 

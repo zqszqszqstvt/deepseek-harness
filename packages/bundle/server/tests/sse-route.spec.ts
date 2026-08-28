@@ -230,7 +230,11 @@ describe('ServerSseMux queue bounds', () => {
   it('drops an overflowing client without affecting the shared mux reader', async () => {
     const source = new ControlledMux()
     const api = { events: { mux: (_request: unknown, signal: AbortSignal) => source.iterate(signal) } } as ApiProxy
-    const mux = new ServerSseMux(api, { maxConnections: 2, maxConnectionsPerUser: 1, clientBufferBytes: 512 })
+    const mux = new ServerSseMux(
+      api,
+      { maxConnections: 2, maxConnectionsPerUser: 1, clientBufferBytes: 512 },
+      vi.fn(),
+    )
     const closeSocket = vi.fn()
     const registered = mux.register('alice', sessionIdFor('alice'), -1, closeSocket)
     expect(registered.ok).toBe(true)
@@ -247,7 +251,12 @@ describe('ServerSseMux queue bounds', () => {
   it('forwards one upstream terminal error and rejects later registrations', async () => {
     const source = new ControlledMux()
     const api = { events: { mux: (_request: unknown, signal: AbortSignal) => source.iterate(signal) } } as ApiProxy
-    const mux = new ServerSseMux(api, { maxConnections: 2, maxConnectionsPerUser: 1, clientBufferBytes: 512 })
+    const reportError = vi.fn()
+    const mux = new ServerSseMux(
+      api,
+      { maxConnections: 2, maxConnectionsPerUser: 1, clientBufferBytes: 512 },
+      reportError,
+    )
     const registered = mux.register('alice', sessionIdFor('alice'), -1, vi.fn())
     expect(registered.ok).toBe(true)
     if (!registered.ok) return
@@ -257,7 +266,10 @@ describe('ServerSseMux queue bounds', () => {
       type: 'stream/error', error: { code: 'internal', message: 'upstream ended', details: {} },
     }))
 
-    expect((await terminal)?.toString('utf8')).toContain('upstream ended')
+    const terminalText = (await terminal)?.toString('utf8') ?? ''
+    expect(terminalText).toContain('event stream failed')
+    expect(terminalText).not.toContain('upstream ended')
+    expect(reportError).toHaveBeenCalledWith({ code: 'internal', message: 'upstream ended', details: {} })
     await expect(registered.client.take()).resolves.toBeUndefined()
     expect(mux.muxState).toBe('failed')
     expect(mux.register('bob', sessionIdFor('bob'), -1, vi.fn())).toEqual({
