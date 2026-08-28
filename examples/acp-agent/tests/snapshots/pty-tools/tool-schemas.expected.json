@@ -20,7 +20,7 @@
           },
           "workdir": {
             "type": "string",
-            "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."
+            "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it, and confined modes reject a resolved directory outside that workspace."
           },
           "run_in_background": {
             "type": "boolean",

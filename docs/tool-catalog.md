@@ -201,7 +201,7 @@ Execute a bash command (`bash -c`) and return its stdout/stderr. Each call runs 
     },
     "workdir": {
       "type": "string",
-      "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."
+      "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it, and confined modes reject a resolved directory outside that workspace."
     },
     "run_in_background": {
       "type": "boolean",
@@ -245,7 +245,7 @@ Execute a PowerShell command (`pwsh -Command`) and return its stdout/stderr. Eac
     },
     "workdir": {
       "type": "string",
-      "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."
+      "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it, and confined modes reject a resolved directory outside that workspace."
     },
     "run_in_background": {
       "type": "boolean",

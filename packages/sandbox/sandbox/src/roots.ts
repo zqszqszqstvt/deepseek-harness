@@ -15,6 +15,7 @@
 
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { SandboxExecutionPolicy } from './index.ts'
 
 /**
@@ -38,6 +39,28 @@ export function canonicalPath(path: string): string {
     // realpathSync.native failed: the path (or a prefix) is missing or unreadable.
     return path
   }
+}
+
+/**
+ * Resolve one process working directory under the effective file policy.
+ * Confined modes require the canonical target to remain at or below the
+ * canonical workspace root. `danger-full-access` preserves an explicit cwd
+ * because the caller's execution backend owns that unrestricted path domain.
+ *
+ * @param requested - caller-selected cwd, or undefined for the workspace root.
+ * @param policy - final per-call policy after deployment caps and approvals.
+ * @returns the canonical confined cwd, or the unrestricted caller value.
+ * @throws Error when a confined cwd escapes the session workspace.
+ */
+export function resolveConfinedCwd(requested: string | undefined, policy: SandboxExecutionPolicy): string {
+  if (policy.mode === 'danger-full-access') return requested ?? policy.workspaceRoot
+  const root = canonicalPath(policy.workspaceRoot)
+  const target = canonicalPath(resolve(root, requested ?? '.'))
+  const relation = relative(root, target)
+  if (relation === '..' || relation.startsWith(`..${sep}`) || isAbsolute(relation)) {
+    throw new Error(`working directory ${JSON.stringify(requested)} is outside the session workspace`)
+  }
+  return target
 }
 
 /**

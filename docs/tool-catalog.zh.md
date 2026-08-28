@@ -205,7 +205,7 @@ ask_user_question 会暂停工具调用，直到当前 UI 提供方返回人类�
     },
     "workdir": {
       "type": "string",
-      "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."
+      "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it, and confined modes reject a resolved directory outside that workspace."
     },
     "run_in_background": {
       "type": "boolean",
@@ -249,7 +249,7 @@ bash 工具是 bash 执行器 seam 面向模型的消费方。使用 `run_in_bac
     },
     "workdir": {
       "type": "string",
-      "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."
+      "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it, and confined modes reject a resolved directory outside that workspace."
     },
     "run_in_background": {
       "type": "boolean",

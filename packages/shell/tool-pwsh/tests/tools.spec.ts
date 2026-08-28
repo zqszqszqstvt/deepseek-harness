@@ -12,7 +12,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { mkdtempSync, realpathSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { CallId } from '@deepseek-ai/dsh-llm'
@@ -208,6 +208,7 @@ async function setupSandboxed(
     mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
     maximumMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
     escalationTargets?: Array<'workspace-write' | 'danger-full-access'>
+    workspaceRoot?: string
   } = {},
 ) {
   const ctx = new Context()
@@ -726,6 +727,89 @@ describe('sandbox escalation through ctx.approval', () => {
     ctx.approval.request = () => Promise.resolve('rogue' as ApprovalOutcome)
     const result = await call(ctx, 'pwsh', escalate, sandboxAgent())
     expect(text(result)).toContain('unreachable variant in EscalationOutcome')
+  })
+})
+
+describe('sandbox workdir confinement', () => {
+  it.each(['read-only', 'workspace-write'] as const)('rejects outside foreground and background workdirs before executor dispatch under %s', async (mode) => {
+    const base = mkdtempSync(join(tmpdir(), 'dsh-tool-pwsh-cwd-'))
+    const workspace = join(base, 'workspace')
+    const outside = join(base, 'outside')
+    mkdirSync(workspace)
+    mkdirSync(outside)
+    try {
+      const { ctx, bash } = await setupSandboxed(false, {
+        mode,
+        maximumMode: mode,
+        escalationTargets: [],
+        workspaceRoot: workspace,
+      })
+      const agent = sandboxAgent(undefined, ctx)
+      Object.assign(agent.session.header, { cwd: workspace })
+      ctx.agents.register(agent)
+      const foreground = await call(ctx, 'pwsh', { command: 'pwd', description: 'outside cwd', workdir: outside }, agent)
+      const background = await call(ctx, 'pwsh', {
+        command: 'pwd', description: 'outside cwd', workdir: outside, run_in_background: true,
+      }, agent)
+      expect(text(foreground)).toContain('outside the session workspace')
+      expect(text(background)).toContain('outside the session workspace')
+      expect(bash.requests).toHaveLength(0)
+      expect(bash.modes).toHaveLength(0)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('accepts relative and absolute workspace descendants', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-tool-pwsh-cwd-'))
+    const nested = join(workspace, 'nested')
+    mkdirSync(nested)
+    try {
+      const { ctx, bash } = await setupSandboxed(false, { mode: 'workspace-write', workspaceRoot: workspace })
+      const agent = sandboxAgent(undefined, ctx)
+      Object.assign(agent.session.header, { cwd: workspace })
+      await call(ctx, 'pwsh', { command: 'pwd', description: 'relative cwd', workdir: 'nested' }, agent)
+      await call(ctx, 'pwsh', { command: 'pwd', description: 'absolute cwd', workdir: nested }, agent)
+      expect(bash.requests.map(request => request.workdir)).toEqual([
+        realpathSync.native(nested),
+        realpathSync.native(nested),
+      ])
+      expect(bash.modes).toEqual(['workspace-write', 'workspace-write'])
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('allows an outside absolute workdir after danger-full-access approval', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'dsh-tool-pwsh-cwd-'))
+    const workspace = join(base, 'workspace')
+    const outside = join(base, 'outside')
+    mkdirSync(workspace)
+    mkdirSync(outside)
+    try {
+      const { ctx, bash } = await setupSandboxed(true, {
+        mode: 'workspace-write',
+        maximumMode: 'danger-full-access',
+        escalationTargets: ['danger-full-access'],
+        workspaceRoot: workspace,
+      })
+      ctx.on('approval/request', () => Promise.resolve<ApprovalOutcome>('allowed-once'))
+      const agent = sandboxAgent(undefined, ctx)
+      Object.assign(agent.session.header, { cwd: workspace })
+      ctx.agents.register(agent)
+      const result = await call(ctx, 'pwsh', {
+        command: 'pwd',
+        description: 'approved outside cwd',
+        workdir: outside,
+        sandbox_permissions: 'danger-full-access',
+        justification: 'the approved command needs the outside directory',
+      }, agent)
+      expect(result.isError).toBe(false)
+      expect(bash.requests[0]?.workdir).toBe(outside)
+      expect(bash.modes).toEqual(['danger-full-access'])
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 })
 

@@ -8,6 +8,8 @@
 
 策略随调用传递，而不属于提供方：两个消费方可以同时按不同策略施加限制（bash 使用 `read-only`，而受限制的子 agent（智能体）保持其状态目录可写）；获批的升权重试只是使用更宽策略发起的新调用。
 
+`resolveConfinedCwd(requested, policy)` 是共享的进程工作目录守卫。消费方解析部署上限与单次审批后，该函数会基于 `workspaceRoot` 规范化相对路径；`read-only` 与 `workspace-write` 会拒绝工作区外的绝对路径以及父目录、盘符或符号链接逃逸，`danger-full-access` 则保留显式 cwd。面向模型的 shell 工具会在执行器解析或发布后台任务前调用它，本地终端后端则在分配 PTY 前调用它。它约束模型为进程选择的初始 cwd，而不约束命令正文随后执行的 `chdir`；spawn 后的实际文件可见性和文件效果仍由沙箱后端负责。
+
 **只支持与宿主共享文件系统和内核的限制。** 后端与宿主共享文件系统和内核（`bwrap`、Landlock、Seatbelt）；`workspaceRoot` 指向文件系统规范化后的真实主机目录。系统先解析工作区所指的目录，再做词法规范化，因此包含 `symlink/..` 的有效 cwd 会授权 `chdir` 实际到达的目录，而非无关的词法父目录。容器、microVM 与远程执行器都不是该 seam 的后端：它们会以环境一致的分组替换整个能力 seam 的 Service Provider（`ctx.shell`、`ctx.fs`）。边界及其设计理由见[沙箱 Agent Note](../../../.agents/notes/implemented/feature/2026-07-06-sandbox.zh.md)。
 
 实现：[`@deepseek-ai/dsh-sandbox-local`](../sandbox-local/)（Linux：`bwrap`，否则使用相应平台的 Landlock launcher；macOS：`sandbox-exec`／Seatbelt）。消费方：[`@deepseek-ai/dsh-bash-sandbox`](../../shell/bash-sandbox/)（包装 `['bash', '-c', command]`）。

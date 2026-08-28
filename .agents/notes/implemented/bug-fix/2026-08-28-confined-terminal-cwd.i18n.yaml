@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-28-confined-terminal-cwd.md
-2026-08-28-confined-terminal-cwd.md: 2d357cb479959989adf4ea0dff7906cfe49f98f1
-2026-08-28-confined-terminal-cwd.zh.md: 39878a1eb77c46812e7861dd7920aa6192efa7fb
+2026-08-28-confined-terminal-cwd.md: ebe9af32c0d11cc7da6e0ce1807899d60310838a
+2026-08-28-confined-terminal-cwd.zh.md: 5af1a7a13b6b6588ee1e5511dde250139ec57c36

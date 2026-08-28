@@ -19,12 +19,12 @@
 | `command` | string (required) | 通过 `pwsh -Command` 运行。调用之间不保留状态——用 `workdir`，不要用 `cd`。 |
 | `description` | string (required) | 命令的一行主动语态摘要（5-10 词），仅用于 UI/日志展示——不影响执行。 |
 | `timeoutMs` | number | 超时覆盖值（毫秒）。执行器应用其配置的默认值与上限。 |
-| `workdir` | string | 本次调用的工作目录。默认取调用 agent（智能体）的会话 cwd（`session.header.cwd`），使每个会话在自己的工作区运行；相对 `workdir` 基于同一身份解析。 |
+| `workdir` | string | 本次调用的工作目录。默认取调用 agent（智能体）的会话 cwd（`session.header.cwd`），使每个会话在自己的工作区运行；相对 `workdir` 基于同一身份解析。在 `read-only` 或 `workspace-write` 下，规范化结果必须留在会话工作区内。 |
 | `run_in_background` | boolean | 立即返回 job id；不适用超时。 |
 | `sandbox_permissions` | string enum | 仅当已挂载 sandbox 执行器且 `ctx.sandboxPolicy.escalationTargets` 非空时才会公开。用于对刚被 sandbox 拒绝的命令做一次性重试的经部署允许的更宽模式，要求 `justification` 并在执行**之前**经 `ctx.approval` 获得用户批准。部署禁用、未拓宽或无法获批的请求 fail-closed，不运行任何内容。 |
 | `justification` | string | 必须与 `sandbox_permissions` 一同提供：用一句话向用户解释为何正是这条命令需要更宽的访问。 |
 
-`command`、`workdir` 与 `timeoutMs` 在执行前经 `ctx.shell.resolve()` 按执行器配置默认值解析。workdir 默认值在工具层于 `resolve()` 之前从调用 agent 的 `session.header.cwd` 取得——每次会话的 cwd 必须来自 `exec.agent`，因为 N 个会话共享一个执行器；仅当没有会话 cwd 时执行器才回退到自己的配置 / `process.cwd()`。
+`command`、`workdir` 与 `timeoutMs` 在执行前经 `ctx.shell.resolve()` 按执行器配置默认值解析。workdir 默认值在工具层于 `resolve()` 之前从调用 agent 的 `session.header.cwd` 取得——每次会话的 cwd 必须来自 `exec.agent`，因为 N 个会话共享一个执行器；仅当没有会话 cwd 时执行器才回退到自己的配置 / `process.cwd()`。沙箱调用使用策略中规范化的工作区根目录作为同一基准；单次审批确定最终模式后，共享 cwd 守卫会在执行器解析、后台任务发布或创建进程前拒绝工作区外的受限路径。获批的 `danger-full-access` 与无沙箱调用仍可使用外部绝对工作目录。
 
 ### Managed shell environment
 

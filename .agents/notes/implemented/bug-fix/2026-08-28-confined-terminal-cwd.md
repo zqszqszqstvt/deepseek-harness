@@ -1,4 +1,4 @@
-# Agent Note: Confined terminal working directory
+# Agent Note: Confined process working directories
 
 Status: implemented
 
@@ -6,17 +6,19 @@ English | [中文](2026-08-28-confined-terminal-cwd.zh.md)
 
 ## Problem
 
-`terminal_open` exposes `cwd` as the initial working directory, but the model-facing consumer replaced every caller value with the workspace root under `read-only` and `workspace-write`. A valid workspace subdirectory therefore had the same result as an omitted value. Removing that replacement without another check would restore the parameter while allowing a local confined process to inherit a host directory outside the mount policy.
+The model can select a process working directory through `bash.workdir`, `pwsh.workdir`, or `terminal_open.cwd`. The terminal consumer replaced every confined caller value with the workspace root, making valid subdirectories ineffective, while the two one-shot shell tools resolved relative paths but passed outside absolute paths to their executors. File confinement could still prevent reads and writes after spawn, but the public working-directory parameters did not enforce the session-workspace scope and an outside inherited cwd could undermine mount-based isolation assumptions.
 
 ## Decision
 
-The model-facing `tool-terminal` consumer forwards `cwd` unchanged to the selected terminal backend and does not depend on sandbox policy. This keeps replaceable backends responsible for their own path domain rather than applying host filesystem rules to every backend type.
+The sandbox Service Definition owns `resolveConfinedCwd(requested, policy)`. Under `read-only` or `workspace-write`, it resolves relative paths against the canonical policy root and accepts only that root or a canonical descendant, rejecting outside absolute paths, parent traversal, other drives, and symlink escapes. Under `danger-full-access`, it preserves an explicit cwd and defaults an omitted value to the policy root.
 
-The local `terminal-bash` backend resolves the session policy immediately before process creation. Under `read-only` or `workspace-write`, an omitted cwd selects the canonical workspace root, a relative cwd resolves against that root, and an explicit cwd is accepted only when its canonical path is the root or a descendant. The check rejects outside absolute paths, parent-traversal escapes, and symlink escapes before terminal allocation. Under `danger-full-access`, an explicit cwd remains unchanged and an omitted value keeps the policy root default.
+The Bash and PowerShell tools first resolve the standing sandbox policy, finish any one-shot approval, and construct the final effective policy. They then apply the shared cwd guard before executor resolution and before background-job publication. A Server deployment whose `maximumMode` is `workspace-write` therefore rejects an outside workdir even if a stale or forged session event claims `danger-full-access`; a native deployment that approves `danger-full-access` retains its outside-directory capability. Non-sandbox tool compositions retain their existing session-relative and external absolute-path behavior.
+
+The model-facing `tool-terminal` consumer forwards `cwd` unchanged because replaceable backends may use a non-host path namespace. The local `terminal-bash` backend applies the same shared guard immediately before process creation, retaining backend ownership of host-path enforcement without duplicating the algorithm.
 
 ## Verification
 
-Provider tests cover relative and absolute workspace subdirectories, the omitted default, both confined modes, outside paths, canonical symlink escapes, and unchanged `danger-full-access` behavior. The model-facing consumer test pins unchanged forwarding to a replaceable backend. The real Loader composition opens a shell in a workspace subdirectory and observes that directory from the running PTY.
+Sandbox tests cover the root, relative and absolute descendants, both confined modes, outside absolute paths, parent traversal, symlink escapes, and unchanged `danger-full-access` behavior. Bash and PowerShell consumer tests prove confined foreground and background rejections occur before executor `resolve`, `run`, or `start`; they also pin accepted descendants and approved unrestricted calls. The Server ceiling regression folds a `danger-full-access` session event through `maximumMode: workspace-write` and proves no executor dispatch occurs. Terminal provider tests and the real Loader composition cover the same helper through PTY allocation and a running shell.
 
 ## Alternatives considered
 
@@ -26,6 +28,8 @@ Provider tests cover relative and absolute workspace subdirectories, the omitted
 
 **Trust process confinement to revoke an outside inherited cwd.** Rejected because mount-based confinement cannot reliably remove a directory handle that the process already inherited. The backend must reject the cwd before allocation.
 
+**Intercept `cd` in shell text.** Rejected as a security mechanism because shell functions, builtins, nested shells, and direct `chdir` calls can bypass command-text rewriting. Completely forbidding post-spawn directory changes requires syscall denial, which breaks common tools, or a container/microVM whose virtual root is the workspace. The current promise is limited to model-selected initial and per-call working-directory parameters; the process sandbox governs file visibility and effects after spawn.
+
 ## Consequences
 
-Confined local terminals can start in any existing workspace directory without weakening workspace isolation. Invalid confined cwd values fail directly instead of silently changing directories. Backend implementations other than `terminal-bash` retain the exact cwd request and remain responsible for any path policy in their own execution environment.
+Every local model-controlled process entry now uses one canonical working-directory rule. Confined calls can start in any existing workspace directory, while invalid paths fail before a process or background job is created. Approved unrestricted and non-sandbox native workflows retain external directory support. Commands may still change their own cwd after spawn, but doing so does not expand the file access the active sandbox backend permits.
