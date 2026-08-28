@@ -8,7 +8,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { renderToolsSdk } from '@deepseek-ai/dsh-tools'
 import type { ToolSdkSchema } from '@deepseek-ai/dsh-tools/src/ts-types.ts'
 import TerminalSessionService, { TerminalSessionId } from '@deepseek-ai/dsh-terminal'
-import type { TerminalBackend, TerminalBackendSession, TerminalSendOperation, TerminalSendRequest, TerminalSessionStatus, TerminalSignal } from '@deepseek-ai/dsh-terminal'
+import type { TerminalBackend, TerminalBackendSession, TerminalBackendSpawnSpec, TerminalSendOperation, TerminalSendRequest, TerminalSessionStatus, TerminalSignal } from '@deepseek-ai/dsh-terminal'
 import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import * as ToolTasks from '@deepseek-ai/dsh-tool-jobs'
 import * as ToolPty from '@deepseek-ai/dsh-tool-terminal'
@@ -86,15 +86,17 @@ class StubSession implements TerminalBackendSession {
 
 function stubBackend() {
   const sessions: StubSession[] = []
+  const spawns: TerminalBackendSpawnSpec[] = []
   const backend: TerminalBackend = {
     type: 'stub',
-    async spawn() {
+    async spawn(spec) {
+      spawns.push(spec)
       const session = new StubSession()
       sessions.push(session)
       return session
     },
   }
-  return { backend, sessions }
+  return { backend, sessions, spawns }
 }
 
 async function setup(jobs: boolean, config: ToolPty.Config = {}) {
@@ -276,12 +278,13 @@ describe('tool-terminal foreground API', () => {
   })
 
   it('validates required values and forwards optional spawn/read arguments', async () => {
-    const { ctx, agent } = await setup(false)
+    const { ctx, agent, stub } = await setup(false)
     expect((await call(ctx, 'terminal_open', { type: '' }, agent)).isError).toBe(true)
     expect((await call(ctx, 'terminal_send', { sessionId: '', text: 'x' }, agent)).isError).toBe(true)
     expect((await call(ctx, 'terminal_send', { sessionId: 1, text: 'x' }, agent)).isError).toBe(true)
     expect((await call(ctx, 'terminal_send', { sessionId: 'pty-1', text: 1 }, agent)).isError).toBe(true)
     await call(ctx, 'terminal_open', { type: 'stub', name: 'named', cwd: '/tmp' }, agent)
+    expect(stub.spawns[0]).toMatchObject({ name: 'named', cwd: '/tmp' })
     expect(text(await call(ctx, 'terminal_read', { sessionId: 'pty-1', offset: 2, count: 3 }, agent))).toContain('history')
   })
 
@@ -309,8 +312,10 @@ describe('tool-terminal foreground API', () => {
   it('explains the confined terminal workspace boundary in the prompt and open tool', async () => {
     const { ctx } = await setup(false)
     const prompt = (await ctx.systemPrompt.assemble()).sections.find(section => section.name === 'tool:pty')?.text ?? ''
-    expect(prompt).toContain('writes outside that workspace')
+    expect(prompt).toContain('starts in the requested directory inside the current session workspace')
+    expect(prompt).toContain('writes outside it')
     expect(ctx.tools.get('terminal_open')?.description).toContain('restricted to the current session workspace')
+    expect(JSON.stringify(ctx.tools.get('terminal_open')?.parameters)).toContain('resolved directory must remain inside it')
   })
 
   it('configuration-gates background sends and validates the final result bound', async () => {

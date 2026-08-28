@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Six model-facing tools over `ctx.terminals`: `terminal_open`, `terminal_send`, `terminal_read`, `terminal_signal`, `terminal_close`, and `terminal_list`. Every operation requires the exact initiating `Agent`, so a model cannot address another agent's terminal even if it learns the id.
+Six model-facing tools over `ctx.terminals`: `terminal_open`, `terminal_send`, `terminal_read`, `terminal_signal`, `terminal_close`, and `terminal_list`. Every operation requires the exact initiating `Agent`, so a model cannot address another agent's terminal even if it learns the id. `terminal_open.cwd` is forwarded to the selected backend; the local shell backend resolves and confines it according to the session sandbox policy.
 
 `terminal_send(run_in_background: true)` reuses `ctx.jobs`; job preflight and the PTY service's exclusive per-session send reservation occur before the job id is returned, completion is collected with `job_output`, and `job_kill` delivers `SIGINT` to the foreground process group. Foreground sends use terminal call/result cards. Background sends use a generic execute card; open, read, signal, close, and list use generic `execute`, `read`, `execute`, `delete`, and `read` cards respectively. None declares source locations.
 
@@ -26,7 +26,7 @@ The plugin contributes this fixed guidance section:
 ##### Terminal guidance
 
 ```markdown
-Use a terminal session only when work needs persistent terminal state or interactive stdin; prefer shell/read/write/edit for bounded one-shot operations. Track every terminal session id and close sessions that no longer matter. An inferred_idle or timeout result does not prove the foreground command exited.
+Use a terminal session only when work needs persistent terminal state or interactive stdin; prefer shell/read/write/edit for bounded one-shot operations. A confined session starts in the requested directory inside the current session workspace, defaulting to that workspace; under workspace-write, writes outside it (apart from the sandbox-managed temporary area) are rejected during execution. Track every terminal session id and close sessions that no longer matter. An inferred_idle or timeout result does not prove the foreground command exited.
 ```
 
 #### Token effect

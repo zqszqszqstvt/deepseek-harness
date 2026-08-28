@@ -16,7 +16,7 @@ function effectiveEntry(id: string): { config?: Record<string, unknown> } {
   expect(warnings).toEqual([])
   const entry = entries.find(candidate => candidate.id === id)
   if (entry === undefined) throw new Error(`missing composed entry ${id}`)
-  return entry as { config?: Record<string, unknown> }
+  return entry
 }
 
 describe('server sandbox deployment policy', () => {
@@ -39,6 +39,13 @@ describe('server sandbox deployment policy', () => {
           description: 'Write only inside the session workspace and permitted temporary directories.',
         },
       },
+    })
+  })
+
+  it('restricts glob and grep search roots to the session workspace', () => {
+    expect(effectiveEntry('tool-fs-search').config).toEqual({
+      sampleOverCapGlobResults: false,
+      strictReads: true,
     })
   })
 })

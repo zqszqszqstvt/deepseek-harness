@@ -257,6 +257,7 @@ export function resolveRgPath(): Promise<string> {
  * @param rawOutputMaxBytes - cap on the complete raw stdout the tool will parse.
  * @param graceMs - the seam's terminate-escalation grace period.
  * @param stderrMaxBytes - cap on the retained stderr diagnostic tail.
+ * @param strictReads - when true, reject an explicit search root outside the canonical session workdir before spawning.
  * @returns the complete stdout, the zero-result flag, and the resolved workdir.
  */
 export async function runRipgrep(
@@ -267,13 +268,14 @@ export async function runRipgrep(
   rawOutputMaxBytes: number,
   graceMs: number,
   stderrMaxBytes: number,
+  strictReads = false,
 ): Promise<RipgrepRun> {
   if (exec.signal.aborted) {
     throw new SearchError(`${toolName} was aborted before completion (tool timeout or caller cancellation)`, 'SEARCH_ABORTED')
   }
   const cwd = exec.agent?.session.header.cwd
   const workdir = cwd ?? process.cwd()
-  await assertSearchRoot(workdir, argv)
+  if (strictReads) await assertSearchRoot(workdir, argv)
   let handle: SubprocessHandle
   try {
     const rawArgv = [await resolveRgPath(), '--no-config', ...argv]

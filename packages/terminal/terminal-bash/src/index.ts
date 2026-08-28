@@ -5,12 +5,13 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { TerminalBackendCleanupError } from '@deepseek-ai/dsh-terminal'
 import type { TerminalBackend, TerminalBackendSpawnSpec } from '@deepseek-ai/dsh-terminal'
 import type { SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
-import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
+import { canonicalPath, type SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import { effectiveSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { ENCODING_PREAMBLE } from '@deepseek-ai/dsh-pwsh-local'
 import { type Config, type ResolvedConfig, resolveConfig, type ShellDialect, validateConfig } from './config.ts'
@@ -51,6 +52,18 @@ function ensureSandboxModeFence(ctx: Context, owner: Agent): void {
       `cannot change sandbox mode from "${currentMode}" to "${event.data.mode}" while persistent terminal sessions are open or being created; wait for creation to settle and close them first`,
     )
   }, { global: true })
+}
+
+/** Resolve a confined PTY cwd against its workspace and reject canonical escapes. */
+function initialCwd(requested: string | undefined, policy: SandboxExecutionPolicy): string {
+  if (policy.mode === 'danger-full-access') return requested ?? policy.workspaceRoot
+  const root = canonicalPath(policy.workspaceRoot)
+  const target = canonicalPath(resolve(root, requested ?? '.'))
+  const relation = relative(root, target)
+  if (relation === '..' || relation.startsWith(`..${sep}`) || isAbsolute(relation)) {
+    throw new Error(`terminal cwd ${JSON.stringify(requested)} is outside the session workspace`)
+  }
+  return target
 }
 
 function childEnvironment(spec: TerminalBackendSpawnSpec, dialect: ShellDialect): Record<string, string> {
@@ -177,11 +190,12 @@ export class BashTerminalBackend implements TerminalBackend {
     spec.signal?.throwIfAborted()
     ensureSandboxModeFence(this.ctx, spec.owner)
     const policy = this.ctx.sandboxPolicy.resolve({ session: spec.owner.session })
+    const cwd = initialCwd(spec.cwd, policy)
     const argv = spawnArgv(this.ctx, this.config, policy)
     if (argv[0] === undefined) throw new Error('terminal-bash: sandbox returned empty argv')
     const terminal = await this.spawnTerminal({
       argv,
-      cwd: spec.cwd ?? policy.workspaceRoot,
+      cwd,
       env: childEnvironment(spec, this.config.shellDialect),
       rows: this.config.rows,
       cols: this.config.cols,

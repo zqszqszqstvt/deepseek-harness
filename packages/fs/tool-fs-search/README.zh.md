@@ -20,11 +20,12 @@ Node 部署在受支持的 macOS、Linux 与 Windows x64/arm64 目标上获得 `
 
 ## 配置
 
-`sampleOverCapGlobResults` 是必填项且没有回退值；部署必须显式选择超过上限时的排序约定。其余配置键是可选的搜索上限，默认值如下。
+`sampleOverCapGlobResults` 是必填项且没有回退值；部署必须显式选择超过上限时的排序约定。其余配置键是可选的部署策略与搜索上限，默认值如下。
 
 | 配置键 | 默认值 | 含义 |
 |---|---|---|
 | `sampleOverCapGlobResults` | 无（必填） | `true` 会在顶层条目之间对超过上限的 `glob` 页面采样；`false` 保留按修改时间排序的前部。格式化 spill 成功时，两种模式都会在该产物中保留完整排序列表。 |
+| `strictReads` | `false` | 设为 `true` 时，会规范化显式 `glob`/`grep` 目标，并在 spawn 前拒绝不在会话工作目录下的目标。工作区隔离部署显式启用；原生 profile 保留历史上的工作区外搜索能力，包括 `danger-full-access`。 |
 | `globMaxResults` | `100` | 一次 `glob` 调用内联展示的最大路径数（与 Claude Code 的 `GlobTool` 上限相同）。未超过上限的结果保持完整，并按修改时间排序。 |
 | `grepMaxMatches` | `250` | 一次 `grep` 调用内联保留的最大平铺匹配数（与 Claude Code 的 `GrepTool` `head_limit` 相同）；后续匹配写入格式化 spill 产物。 |
 | `grepMaxLineBytes` | `2000` | 每条匹配行预览的字节上限；截断会保留 UTF-8 边界，并标记为 `(line truncated)`。 |

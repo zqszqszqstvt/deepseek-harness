@@ -41,6 +41,8 @@ export const GLOB_VCS_EXCLUDES: readonly string[] = ['.git', '.svn', '.hg', '.bz
 export interface GlobToolCaps {
   /** Whether over-cap pages are sampled across top-level entries instead of taking the modification-time head. */
   sampleOverCapGlobResults: boolean
+  /** Whether explicit search roots must remain under the canonical session workdir. */
+  strictReads: boolean
   /** Max paths retained inline; later paths go to the formatted spill file. */
   maxResults: number
   /** Max bytes of serialized `presentationMeta`; trailing paths drop past it. */
@@ -295,6 +297,7 @@ export function presentGlobResult(_args: { pattern: string; path?: string }, res
  * @param caps - the deployment's resolved glob caps (plugin config after defaulting).
  */
 export function applyGlobTool(ctx: Context, caps: GlobToolCaps): void {
+  const rootConstraint = caps.strictReads ? ' Search roots must remain inside the session workspace.' : ''
   const overCapGuidance = caps.sampleOverCapGlobResults
     ? 'while a larger one is sampled across top-level entries, so it spans the tree instead of one subtree.'
     : 'while a larger one keeps the modification-time-ordered head.'
@@ -302,7 +305,7 @@ export function applyGlobTool(ctx: Context, caps: GlobToolCaps): void {
     name: 'tool:glob',
     order: 103,
     text: 'Use the glob tool — not shell find — to discover files by path pattern. A pattern with no "/" matches basenames at any depth, so "*" matches every file in the tree rather than its top level. '
-      + `Results are files only, never directories, and include hidden and ignored files: a result that fits comes back in modification-time order, ${overCapGuidance}`,
+      + `Results are files only, never directories, and include hidden and ignored files: a result that fits comes back in modification-time order, ${overCapGuidance}${rootConstraint}`,
   })
 
   const overCapDescription = caps.sampleOverCapGlobResults
@@ -321,7 +324,10 @@ export function applyGlobTool(ctx: Context, caps: GlobToolCaps): void {
         description: 'Glob pattern to match file paths against (e.g. "**/*.ts", "src/**/*.test.js"). '
           + 'A pattern with no "/" matches the basename at any depth, so "*" and "*.ts" both search the whole tree; include a separator to anchor the depth.',
       },
-      path: { type: 'string', description: 'Directory to search in. Defaults to the session workspace; a relative path resolves against it.' },
+      path: {
+        type: 'string',
+        description: `Directory to search in. Defaults to the session workspace; a relative path resolves against it.${rootConstraint}`,
+      },
     },
     timeoutMs: caps.timeoutMs,
     output: {
@@ -341,7 +347,7 @@ export function applyGlobTool(ctx: Context, caps: GlobToolCaps): void {
     },
     async execute(args, exec) {
       const input = parseGlobArgs(args)
-      const run = await runRipgrep(ctx, exec, 'glob', buildGlobCommand(input), caps.rawOutputMaxBytes, caps.graceMs, caps.stderrMaxBytes)
+      const run = await runRipgrep(ctx, exec, 'glob', buildGlobCommand(input), caps.rawOutputMaxBytes, caps.graceMs, caps.stderrMaxBytes, caps.strictReads)
       const root = input.path === undefined ? '.' : toWorkdirRelative(input.path, run.workdir)
       if (run.noMatches) return { root, paths: [] }
 

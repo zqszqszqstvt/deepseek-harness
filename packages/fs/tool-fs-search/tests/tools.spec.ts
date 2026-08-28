@@ -11,6 +11,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
 import { join, sep } from 'node:path'
 import { createUserMessage, CallId } from '@deepseek-ai/dsh-llm'
@@ -243,8 +245,19 @@ describe('registration', () => {
     expect(prompt).toContain('Use the grep tool')
     expect(prompt).toContain('sampled across top-level entries')
     expect(prompt).not.toContain('sampled across top-level directories')
+    expect(prompt).not.toContain('must remain inside the session workspace')
     const glob = ctx.tools.schemas().find(schema => schema.name === 'glob')
     expect(glob?.description).toContain('sampled across top-level entries')
+  })
+
+  it('advertises the workspace search boundary when strictReads is enabled', async () => {
+    const { ctx } = await setup({ config: { strictReads: true } })
+    const prompt = renderPrompt(await ctx.systemPrompt.assemble())
+    expect(prompt).toContain('Search roots must remain inside the session workspace')
+    expect(prompt).toContain('Search targets must remain inside the session workspace')
+    const schemas = JSON.stringify(ctx.tools.schemas())
+    expect(schemas).toContain('Search roots must remain inside the session workspace')
+    expect(schemas).toContain('Search targets must remain inside the session workspace')
   })
 
   it('stays pending until ctx.subprocess exists (inject)', async () => {
@@ -293,6 +306,7 @@ describe('config validation', () => {
     expect(() => new ToolFsSearch.Config()).toThrow(/sampleOverCapGlobResults/)
     expect(new ToolFsSearch.Config({ sampleOverCapGlobResults: false })).toMatchObject({
       sampleOverCapGlobResults: false,
+      strictReads: false,
       globMaxResults: 100,
     })
   })
@@ -379,12 +393,51 @@ describe('command construction (plain argv)', () => {
 })
 
 describe('workdir derivation and signal forwarding', () => {
-  it('rejects an explicit search root outside the session workspace before spawning ripgrep', async () => {
+  it.each([
+    ['glob', { pattern: '*', path: join('/sessions/s1', '..', 'outside') }],
+    ['grep', { pattern: 'needle', path: join('/sessions/s1', '..', 'outside') }],
+  ])('allows %s outside the session workspace by default for native deployments', async (name, args) => {
     const { ctx, subprocess } = await setup()
-    const result = await call(ctx, 'glob', { pattern: '*', path: join('/sessions/s1', '..', 'outside') }, { agent: agent('/sessions/s1') })
+    subprocess.handler = () => runResult('', { exitCode: 1 })
+    const result = await call(ctx, name, args, { agent: agent('/sessions/s1') })
+    expect(result.isError).toBe(false)
+    expect(subprocess.spawns).toHaveLength(1)
+  })
+
+  it.each([
+    ['glob', { pattern: '*', path: join('/sessions/s1', '..', 'outside') }],
+    ['grep', { pattern: 'needle', path: join('/sessions/s1', '..', 'outside') }],
+  ])('rejects %s outside the session workspace when strictReads is enabled', async (name, args) => {
+    const { ctx, subprocess } = await setup({ config: { strictReads: true } })
+    const result = await call(ctx, name, args, { agent: agent('/sessions/s1') })
     expect(result.isError).toBe(true)
     expect(text(result)).toContain('outside the session workspace')
     expect(subprocess.spawns).toHaveLength(0)
+  })
+
+  it('rejects a canonical symlink escape when strictReads is enabled', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-search-strict-'))
+    const workspace = join(base, 'workspace')
+    const outside = join(base, 'outside')
+    await Promise.all([mkdir(workspace), mkdir(outside)])
+    try {
+      await symlink(outside, join(workspace, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+      const { ctx, subprocess } = await setup({ config: { strictReads: true } })
+      const result = await call(ctx, 'glob', { pattern: '*', path: 'escape' }, { agent: agent(workspace) })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toContain('outside the session workspace')
+      expect(subprocess.spawns).toHaveLength(0)
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('allows an in-workspace search root when strictReads is enabled', async () => {
+    const { ctx, subprocess } = await setup({ config: { strictReads: true } })
+    subprocess.handler = () => runResult('', { exitCode: 1 })
+    const result = await call(ctx, 'grep', { pattern: 'needle', path: 'src' }, { agent: agent('/sessions/s1') })
+    expect(result.isError).toBe(false)
+    expect(subprocess.spawns).toHaveLength(1)
   })
 
   it('forwards the session cwd as the spawn cwd', async () => {

@@ -10,7 +10,6 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { TerminalSessionId } from '@deepseek-ai/dsh-terminal'
 import type { TerminalSendResult, TerminalSessionId as TerminalSessionIdType, TerminalSignal } from '@deepseek-ai/dsh-terminal'
-import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-jobs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -157,7 +156,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.systemPrompt.section({
     name: 'tool:pty',
     order: 106,
-    text: 'Use a terminal session only when work needs persistent terminal state or interactive stdin; prefer shell/read/write/edit for bounded one-shot operations. Confined sessions start in the current session workspace; under workspace-write, writes outside that workspace (apart from the sandbox-managed temporary area) are rejected during execution. Track every terminal session id and close sessions that no longer matter. An inferred_idle or timeout result does not prove the foreground command exited.',
+    text: 'Use a terminal session only when work needs persistent terminal state or interactive stdin; prefer shell/read/write/edit for bounded one-shot operations. A confined session starts in the requested directory inside the current session workspace, defaulting to that workspace; under workspace-write, writes outside it (apart from the sandbox-managed temporary area) are rejected during execution. Track every terminal session id and close sessions that no longer matter. An inferred_idle or timeout result does not prove the foreground command exited.',
   })
 
   ctx.tools.register(defineTool({
@@ -166,7 +165,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     parameters: {
       type: { type: 'string', required: true, description: 'Registered terminal backend type, usually "shell".' },
       name: { type: 'string', description: 'Optional owner-local display name such as "main" or "gdb".' },
-      cwd: { type: 'string', description: 'Initial working directory. Defaults to the deployment workspace root.' },
+      cwd: { type: 'string', description: 'Initial working directory. In confined modes, relative paths resolve against the session workspace and the resolved directory must remain inside it; defaults to the workspace root.' },
     },
     finalizeContent,
     output: {
@@ -182,18 +181,10 @@ export function apply(ctx: Context, config: Config = {}): void {
     },
     async execute(args: SpawnArgs, exec) {
       if (args.type.length === 0) throw new Error('type must be a non-empty string')
-      const owner = requireAgent(exec.agent)
-      const policy = ctx.get('sandboxPolicy')?.resolve({ session: owner.session })
-      // A confined PTY must start inside its policy root. Passing a host cwd
-      // outside the root would leave the child with an inherited directory
-      // handle that mount-based confinement cannot reliably revoke.
-      const cwd = policy !== undefined && policy.mode !== 'danger-full-access'
-        ? policy.workspaceRoot
-        : args.cwd
-      const result = await ctx.terminals.spawn(owner, {
+      const result = await ctx.terminals.spawn(requireAgent(exec.agent), {
         type: args.type,
         ...args.name !== undefined ? { name: args.name } : {},
-        ...cwd !== undefined ? { cwd } : {},
+        ...args.cwd !== undefined ? { cwd: args.cwd } : {},
       }, exec.signal)
       return result
     },

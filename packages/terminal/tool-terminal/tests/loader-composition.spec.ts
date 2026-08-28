@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -62,6 +62,8 @@ const suite = process.platform === 'linux' || process.platform === 'darwin' ? de
 suite('terminal real Loader composition through cordis.yml', () => {
   it('boots cordis.yml and preserves shell state across real tool calls', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-pty-loader-'))
+    const nested = join(root, 'nested')
+    await mkdir(nested)
     const configPath = join(root, 'cordis.yml')
     await writeFile(configPath, [
       "- name: '@deepseek-ai/dsh-agent'",
@@ -71,7 +73,7 @@ suite('terminal real Loader composition through cordis.yml', () => {
       "- name: '@deepseek-ai/dsh-test-sandbox'",
       "- name: '@deepseek-ai/dsh-sandbox-policy'",
       '  config:',
-      '    mode: danger-full-access',
+      '    mode: workspace-write',
       `    workspaceRoot: ${JSON.stringify(root)}`,
       "- name: '@deepseek-ai/dsh-subprocess-local'",
       "- name: '@deepseek-ai/dsh-terminal-bash'",
@@ -114,17 +116,17 @@ suite('terminal real Loader composition through cordis.yml', () => {
     const owner = agent(context)
     const signal = new AbortController().signal
     const spawn = await context.tools.execute({
-      signal, callId: CallId('spawn'), name: 'terminal_open', arguments: { type: 'shell', name: 'main', cwd: root }, agent: owner,
+      signal, callId: CallId('spawn'), name: 'terminal_open', arguments: { type: 'shell', name: 'main', cwd: nested }, agent: owner,
     })
     expect(resultText(spawn)).toContain('started terminal session pty-1 (main)')
 
     await context.tools.execute({
-      signal, callId: CallId('state'), name: 'terminal_send', arguments: { sessionId: 'pty-1', text: 'export KEEP=loader; cd /' }, agent: owner,
+      signal, callId: CallId('state'), name: 'terminal_send', arguments: { sessionId: 'pty-1', text: 'export KEEP=loader' }, agent: owner,
     })
     const read = await context.tools.execute({
       signal, callId: CallId('read'), name: 'terminal_send', arguments: { sessionId: 'pty-1', text: 'printf "cwd=%s keep=%s\\n" "$PWD" "$KEEP"' }, agent: owner,
     })
-    expect(resultText(read)).toContain('cwd=/ keep=loader')
+    expect(resultText(read)).toContain(`cwd=${await realpath(nested)} keep=loader`)
     expect(context.terminals.list(owner)).toHaveLength(1)
   }, 15_000)
 })

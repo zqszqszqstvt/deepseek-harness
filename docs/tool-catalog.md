@@ -858,7 +858,7 @@ Create a persistent, owner-isolated terminal session from a registered backend t
     },
     "cwd": {
       "type": "string",
-      "description": "Initial working directory. Defaults to the deployment workspace root."
+      "description": "Initial working directory. In confined modes, relative paths resolve against the session workspace and the resolved directory must remain inside it; defaults to the workspace root."
     }
   },
   "required": [

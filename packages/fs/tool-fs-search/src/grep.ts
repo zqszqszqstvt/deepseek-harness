@@ -37,6 +37,8 @@ export const GREP_MAX_LINE_BYTES = 2000
 
 /** Resolved grep-tool caps — plugin config after defaulting (see `Config` in index.ts). */
 export interface GrepToolCaps {
+  /** Whether explicit search roots must remain under the canonical session workdir. */
+  strictReads: boolean
   /** Max flat matches retained inline; later matches go to the formatted spill file. */
   maxMatches: number
   /** Max bytes retained per matched-line preview. */
@@ -273,10 +275,11 @@ export function presentGrepResult(
  * @param caps - the deployment's resolved grep caps (plugin config after defaulting).
  */
 export function applyGrepTool(ctx: Context, caps: GrepToolCaps): void {
+  const rootConstraint = caps.strictReads ? ' Search targets must remain inside the session workspace.' : ''
   ctx.systemPrompt.section({
     name: 'tool:grep',
     order: 104,
-    text: 'Use the grep tool — not shell grep or rg — to search file contents. Use read on a matched file when you need surrounding context.',
+    text: `Use the grep tool — not shell grep or rg — to search file contents. Use read on a matched file when you need surrounding context.${rootConstraint}`,
   })
 
   const tool = defineTool({
@@ -286,7 +289,10 @@ export function applyGrepTool(ctx: Context, caps: GrepToolCaps): void {
       + 'Use read on a matched file for surrounding context.',
     parameters: {
       pattern: { type: 'string', required: true, description: 'Regular expression to search for (ripgrep syntax).' },
-      path: { type: 'string', description: 'File or directory to search. Defaults to the session workspace; a relative path resolves against it.' },
+      path: {
+        type: 'string',
+        description: `File or directory to search. Defaults to the session workspace; a relative path resolves against it.${rootConstraint}`,
+      },
       include: { type: 'string', description: 'One glob filter for which files to search (e.g. "*.ts", "*.{js,jsx}"). Not a list; negation is not supported.' },
     },
     timeoutMs: caps.timeoutMs,
@@ -319,7 +325,7 @@ export function applyGrepTool(ctx: Context, caps: GrepToolCaps): void {
     },
     async execute(args, exec) {
       const input = parseGrepArgs(args)
-      const run = await runRipgrep(ctx, exec, 'grep', buildGrepCommand(input), caps.rawOutputMaxBytes, caps.graceMs, caps.stderrMaxBytes)
+      const run = await runRipgrep(ctx, exec, 'grep', buildGrepCommand(input), caps.rawOutputMaxBytes, caps.graceMs, caps.stderrMaxBytes, caps.strictReads)
       if (run.noMatches) return { matches: [] }
 
       const all: GrepMatch[] = []

@@ -14,15 +14,21 @@ The shared sandbox escalation flow treats an `allowed-once` answer as authority 
 
 The Server overlay sets `mode` and `maximumMode` to `workspace-write`, sets `escalationTargets` to an empty list, and exposes only the `workspace-write` permission preset. Bash, PowerShell, and filesystem mutation tools therefore omit escalation fields and retry hints in Server sessions. A forced `sandbox_permissions` argument fails before approval and before any executor or filesystem provider receives the call. The approval service and Server approval transport remain composed for non-sandbox approval types. Explicit TypeScript path mappings for the Server startup and persistence subpaths keep pnpm source launches independent of prebuilt `lib` artifacts.
 
+Search confinement is a deployment choice on the shared `tool-fs-search` plugin. Its `strictReads` config defaults to `false`, preserving native Web, Headless, and `danger-full-access` searches outside the workdir. The Server overlay alone enables it, causing `glob` and `grep` to reject explicit targets whose canonical paths leave the session workspace and to advertise that boundary to the model.
+
 ## Enforcement
 
 The policy resolver caps every input source rather than trusting the permission preset or session log. The shared escalation helper rejects targets absent from the deployment list before resolving an approval service, and every enforcing tool passes the same owner-provided list into that helper. These checks keep schema omission as model guidance while execution remains authoritative.
+
+The search guard resolves the session workdir and requested target through their deepest existing ancestors before containment comparison, so `..`, absolute paths, and symlinked directories cannot bypass Server search isolation. The guard runs only when the deployment enables `strictReads`; it is not inferred from the shared sandbox default.
 
 Config validation rejects a default or escalation target above `maximumMode` and rejects duplicate targets. Cordis profile layers still replace an entry's complete config, so the Server overlay restates `mode` and `workspaceRoot` alongside the new fields.
 
 ## Verification
 
 Policy tests pin unchanged defaults, invalid configurations, and ceiling behavior for durable and explicit `danger-full-access` values. Shared escalation tests prove a disabled target never calls the approver. Bash, PowerShell, and filesystem tool tests prove schema omission, missing retry guidance, pre-execution rejection, and unchanged default escalation. A base-plus-Server overlay composition test pins the effective sandbox policy and permission table; Linux sandbox end-to-end coverage separately proves that strict workspace confinement rejects out-of-workspace creation at execution.
+
+Search-tool tests prove native default calls still spawn for outside-workspace `glob` and `grep` targets, while strict calls reject both tools before spawn, accept in-workspace targets, and reject canonical symlink escapes. The Server composition test pins `strictReads: true` without dropping the search plugin's required sampling choice.
 
 ## Alternatives considered
 
@@ -36,4 +42,6 @@ Policy tests pin unchanged defaults, invalid configurations, and ceiling behavio
 
 ## Consequences
 
-Server users cannot read or write other host user content outside their session workspace through DSH-confined shell or filesystem operations, even after approving a request or carrying a stale wider session mode. Strict Linux shell confinement still exposes the read-only system paths required to start programs, while it leaves other user directories unmounted. Users receive a direct denial without misleading escalation guidance. Administrators retain the existing plugin and profile extension points, and non-Server compositions keep the prior escalation defaults. A deployment that deliberately edits the Server overlay or applies a later administrator-owned patch can select a different ceiling; end-user approval alone cannot do so.
+The Server startup also rejects non-Linux hosts because the sandbox maximum cannot create workspace-only shell reads where the platform executor does not provide them. The [Linux-only multi-user Server](2026-08-28-server-linux-only.md) decision owns that platform restriction.
+
+Server users cannot read, search, or write other host user content outside their session workspace through DSH-confined shell or filesystem operations, even after approving a request or carrying a stale wider session mode. Strict Linux shell confinement still exposes the read-only system paths required to start programs, while it leaves other user directories unmounted. Users receive a direct denial without misleading escalation guidance. Administrators retain the existing plugin and profile extension points, and non-Server compositions keep the prior escalation and search defaults. A deployment that deliberately edits the Server overlay or applies a later administrator-owned patch can select a different ceiling; end-user approval alone cannot do so.

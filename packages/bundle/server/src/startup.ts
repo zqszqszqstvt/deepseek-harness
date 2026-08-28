@@ -13,6 +13,19 @@ export const inject = ['cmdlineArgs']
 /** Cordis service key carrying parsed Server startup values. */
 export const SERVER_STARTUP_SERVICE = 'serverStartup'
 
+/** Process facts replaced only by deterministic startup tests. */
+export const internals: { platform: NodeJS.Platform } = { platform: process.platform }
+
+/**
+ * Describe why one host platform cannot run the multi-user Server.
+ * @param platform - Node host platform to evaluate.
+ * @returns undefined for Linux, otherwise the operator-facing rejection.
+ */
+export function serverPlatformError(platform: NodeJS.Platform): string | undefined {
+  if (platform === 'linux') return undefined
+  return `dsh server is supported only on Linux because ${platform} cannot enforce workspace-only shell reads; run dsh server on Linux`
+}
+
 /** Parsed Server command-line values shared by the HTTP and persistence plugins. */
 export interface ServerStartupValues {
   /** HTTP bind address, or undefined before the command applies its default. */
@@ -46,7 +59,7 @@ interface ServerOptions {
 function serverCommand(): Command {
   return new Command()
     .name('dsh server')
-    .description('Serve the multi-user dsh API in one long-lived process.')
+    .description('Serve the Linux-only multi-user dsh API in one long-lived process.')
     .helpOption('-h, --help', 'show this help')
     .option('--host <host>', 'bind host (127.0.0.1 or 0.0.0.0)')
     .option('--port <port>', 'listen port; pass 0 to let the OS pick a free one')
@@ -57,6 +70,8 @@ function serverCommand(): Command {
     .option('--sse-buffer-bytes <n>', 'maximum queued bytes per slow SSE response (default: 1048576)')
     .addHelpText('after', `
 Deployment contract:
+  dsh server runs only on Linux. macOS and Windows cannot enforce workspace-only
+  reads for every shell command and are rejected before the Server starts.
   dsh server does not authenticate clients. Keep it on loopback or a trusted
   backend network. The authenticating backend must derive each URL userId from
   the authenticated principal; never accept a caller-controlled userId.
@@ -70,6 +85,8 @@ Examples:
 export function apply(ctx: Context): void {
   const program = serverCommand()
   program.action(() => {
+    const platformError = serverPlatformError(internals.platform)
+    if (platformError !== undefined) program.error(`error: ${platformError}`)
     const options = program.opts<ServerOptions>()
     const host = options.host ?? '127.0.0.1'
     if (host !== '127.0.0.1' && host !== '0.0.0.0') program.error(`error: --host must be 127.0.0.1 or 0.0.0.0, got ${JSON.stringify(host)}`)

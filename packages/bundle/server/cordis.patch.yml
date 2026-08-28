@@ -78,3 +78,8 @@
 - id: fs-sandbox
   config:
     strictReads: true
+
+- id: tool-fs-search
+  config:
+    sampleOverCapGlobResults: false
+    strictReads: true

@@ -6,7 +6,7 @@
 
 ## 插件（`terminal-bash`）
 
-该插件注入 `pty`、`sandboxPolicy` 和 `subprocess`，然后注册所配置的后端类型（`shell`）。`danger-full-access` 无需沙箱提供方即可直接启动 shell；受限模式要求同一执行世界中存在 `ctx.sandbox`，并通过它包装确切的 shell argv，未挂载时会在 spawn 前失败。spawn 时，一次 `ctx.sandboxPolicy.resolve({ session })` 调用会同时给出实际模式与会话工作区根目录；调用方省略 cwd 时，同一根目录也是 shell 的默认 cwd。当某个所有者存在开放的 PTY 或正在进行 spawn 时，如果配置变更会得到不同的实际模式，系统会在对应 `sandbox/mode` 事件提交前拒绝该变更。该限制绑定到确切所有者，因此即使提供方重新加载并保留现有会话，它仍然有效。更改模式前，请等待创建完成并关闭会话，避免以更宽权限打开的终端在权限降级后继续存在。
+该插件注入 `pty`、`sandboxPolicy` 和 `subprocess`，然后注册所配置的后端类型（`shell`）。`danger-full-access` 无需沙箱提供方即可直接启动 shell；受限模式要求同一执行世界中存在 `ctx.sandbox`，并通过它包装确切的 shell argv，未挂载时会在 spawn 前失败。spawn 时，一次 `ctx.sandboxPolicy.resolve({ session })` 调用会同时给出实际模式与会话工作区根目录。在受限模式下，省略 cwd 时默认使用该根目录，相对 cwd 基于该目录解析，且规范化结果必须留在其中；工作区外的绝对路径以及任何通过 `..` 或符号链接形成的逃逸都会在终端分配前被拒绝。`danger-full-access` 保留调用方的 cwd 语义。当某个所有者存在开放的 PTY 或正在进行 spawn 时，如果配置变更会得到不同的实际模式，系统会在对应 `sandbox/mode` 事件提交前拒绝该变更。该限制绑定到确切所有者，因此即使提供方重新加载并保留现有会话，它仍然有效。更改模式前，请等待创建完成并关闭会话，避免以更宽权限打开的终端在权限降级后继续存在。
 
 `shellDialect` 选择 shell 栈（默认 `bash`，或 `pwsh`）：它决定默认的 `shellPath`／`shellArgs`（bash 为 `--noprofile --norc -i`；pwsh 经共享的 `dsh-pwsh-local` 解析器得到 `-NoLogo -NoProfile`）与启动契约。bash 方言通过环境安装提示符（`PS1` 加 OSC `133;D;` 终结的 `PROMPT_COMMAND`）。pwsh 无法从环境安装提示符，因此后端通过会话写入 `prompt` 函数，并等待受控提示符真正可见——因为 pwsh 从横幅到提示符的间隙可能超过静默上限，所以会在后续 send 上循环等待；同时其环境去掉 bash 专属标记并加 `NO_COLOR`。同一条首发送还会带上共享的 `dsh-pwsh-local` 编码前缀，在一切运行之前把 `[Console]::OutputEncoding` 与 `$OutputEncoding` 钉为 UTF-8：会话解码路径按 UTF-8 读取 PTY 字节，未钉住编码的控制台会以宿主代码页输出非 ASCII 内容。两种方言发出相同的 BEL 终结 OSC 标记，因此就绪机制与消费方与方言无关。
 

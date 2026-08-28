@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { PassThrough } from 'node:stream'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import AgentRegistry, { Inbox, type Agent } from '@deepseek-ai/dsh-agent'
 import SandboxProvider from '@deepseek-ai/dsh-sandbox'
-import type { ConfinedArgv, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
+import type { ConfinedArgv, SandboxMode, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import SandboxPolicyService, { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import TerminalSessionService, { TerminalBackendCleanupError, TerminalSessionId } from '@deepseek-ai/dsh-terminal'
 import type { TerminalSendRequest, TerminalWaitReason } from '@deepseek-ai/dsh-terminal'
@@ -82,11 +84,29 @@ class StubSubprocessRuntime extends SubprocessRuntime {
   }
 }
 
-function spec(owner: Agent, signal?: AbortSignal) {
+function spec(owner: Agent, signal?: AbortSignal, cwd?: string) {
   return {
     sessionId: TerminalSessionId('pty-1'), owner, type: 'shell',
     ...signal !== undefined ? { signal } : {},
+    ...cwd !== undefined ? { cwd } : {},
   }
+}
+
+async function cwdBackend(mode: SandboxMode, workspaceRoot: string) {
+  const ctx = new Context()
+  await ctx.plugin(RecordingSandbox)
+  await ctx.plugin(SandboxPolicyService, { mode, workspaceRoot })
+  const spawns: SubprocessTerminalSpawnSpec[] = []
+  const backend = new BashTerminalBackend(
+    ctx,
+    config(),
+    async (spawnSpec) => {
+      spawns.push(spawnSpec)
+      return terminalHandle()
+    },
+    () => stubLocalSession(),
+  )
+  return { backend, ctx, spawns }
 }
 
 function stubLocalSession(initialize: () => Promise<void> = () => Promise.resolve()): LocalPtySession {
@@ -197,7 +217,7 @@ describe('BashTerminalBackend startup rollback', () => {
     const previous = process.env.PTY_TEST_SECRET
     process.env.PTY_TEST_SECRET = 'must-not-leak'
     try {
-      expect(await backend.spawn({ ...spec(agent(ctx)), cwd: '/work' })).toBe(session)
+      expect(await backend.spawn({ ...spec(agent(ctx)), cwd: '/workspace/work' })).toBe(session)
     } finally {
       if (previous === undefined) delete process.env.PTY_TEST_SECRET
       else process.env.PTY_TEST_SECRET = previous
@@ -207,7 +227,7 @@ describe('BashTerminalBackend startup rollback', () => {
       argv: ['/sandbox', '--', '/bin/bash', '-i'],
       cols: 80,
       rows: 24,
-      cwd: '/work',
+      cwd: resolve('/workspace/work'),
       graceMs: 10,
       env: {
         TERM: 'dumb', PAGER: 'cat', GIT_PAGER: 'cat', PS1: 'dsh> ', BASH_SILENCE_DEPRECATION_WARNING: '1',
@@ -466,6 +486,64 @@ describe('BashTerminalBackend startup rollback', () => {
     expect(spawned.motd).toBe('dsh> ')
     expect(sends).toHaveLength(1)
     expect(sends[0]?.signal).toBe(signal)
+  })
+})
+
+describe('BashTerminalBackend initial cwd', () => {
+  it.each(['read-only', 'workspace-write'] as const)('honors relative and absolute workspace subdirectories under %s', async (mode) => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-terminal-cwd-'))
+    const nested = join(root, 'nested')
+    await mkdir(nested)
+    try {
+      const { backend, ctx, spawns } = await cwdBackend(mode, root)
+      const owner = agent(ctx)
+      await backend.spawn(spec(owner, undefined, 'nested'))
+      await backend.spawn(spec(owner, undefined, nested))
+      await backend.spawn(spec(owner))
+      expect(spawns.map(spawn => spawn.cwd)).toEqual([
+        await realpath(nested),
+        await realpath(nested),
+        await realpath(root),
+      ])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['read-only', 'workspace-write'] as const)('rejects an outside cwd before spawning under %s', async (mode) => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-terminal-cwd-'))
+    const workspace = join(base, 'workspace')
+    const outside = join(base, 'outside')
+    await Promise.all([mkdir(workspace), mkdir(outside)])
+    try {
+      const { backend, ctx, spawns } = await cwdBackend(mode, workspace)
+      await expect(backend.spawn(spec(agent(ctx), undefined, outside))).rejects.toThrow('outside the session workspace')
+      expect(spawns).toHaveLength(0)
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a symlinked cwd that resolves outside a confined workspace', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-terminal-cwd-'))
+    const workspace = join(base, 'workspace')
+    const outside = join(base, 'outside')
+    await Promise.all([mkdir(workspace), mkdir(outside)])
+    try {
+      await symlink(outside, join(workspace, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+      const { backend, ctx, spawns } = await cwdBackend('workspace-write', workspace)
+      await expect(backend.spawn(spec(agent(ctx), undefined, 'escape'))).rejects.toThrow('outside the session workspace')
+      expect(spawns).toHaveLength(0)
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps danger-full-access cwd handling unchanged', async () => {
+    const { backend, ctx, spawns } = await cwdBackend('danger-full-access', '/deployment-workspace')
+    await backend.spawn(spec(agent(ctx), undefined, '../outside'))
+    await backend.spawn(spec(agent(ctx)))
+    expect(spawns.map(spawn => spawn.cwd)).toEqual(['../outside', resolve('/deployment-workspace')])
   })
 })
 

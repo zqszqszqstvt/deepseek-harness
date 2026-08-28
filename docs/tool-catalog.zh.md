@@ -864,7 +864,7 @@ glob 和 grep 是无条件可用的发现工具，通过 ctx.subprocess spawn �
     },
     "cwd": {
       "type": "string",
-      "description": "Initial working directory. Defaults to the deployment workspace root."
+      "description": "Initial working directory. In confined modes, relative paths resolve against the session workspace and the resolved directory must remain inside it; defaults to the workspace root."
     }
   },
   "required": [

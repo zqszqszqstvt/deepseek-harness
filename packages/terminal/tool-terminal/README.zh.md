@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-基于 `ctx.terminals` 提供 6 个面向模型的工具：`terminal_open`、`terminal_send`、`terminal_read`、`terminal_signal`、`terminal_close` 和 `terminal_list`。每项操作都要求提供完全相同的发起 `Agent`，因此即使模型获知另一个 agent（智能体）的 id，也无法操作其终端。
+基于 `ctx.terminals` 提供 6 个面向模型的工具：`terminal_open`、`terminal_send`、`terminal_read`、`terminal_signal`、`terminal_close` 和 `terminal_list`。每项操作都要求提供完全相同的发起 `Agent`，因此即使模型获知另一个 agent（智能体）的 id，也无法操作其终端。`terminal_open.cwd` 会转发给所选后端；本地 shell 后端按照会话沙箱策略解析并限制该目录。
 
 `terminal_send(run_in_background: true)` 会复用 `ctx.jobs`；任务预检和 PTY 服务对每个会话的独占发送预留都发生在返回 job id 之前。系统通过 `job_output` 收集完成结果，`job_kill` 则向前台进程组发送 `SIGINT`。前台发送使用终端调用／结果卡片。后台发送使用通用执行卡片；打开、读取、发送信号、关闭和列出操作则分别使用通用 `execute`、`read`、`execute`、`delete` 和 `read` 卡片。所有操作都不声明源位置。
 
@@ -26,7 +26,7 @@
 ##### 终端指引
 
 ```markdown
-Use a terminal session only when work needs persistent terminal state or interactive stdin; prefer shell/read/write/edit for bounded one-shot operations. Track every terminal session id and close sessions that no longer matter. An inferred_idle or timeout result does not prove the foreground command exited.
+Use a terminal session only when work needs persistent terminal state or interactive stdin; prefer shell/read/write/edit for bounded one-shot operations. A confined session starts in the requested directory inside the current session workspace, defaulting to that workspace; under workspace-write, writes outside it (apart from the sandbox-managed temporary area) are rejected during execution. Track every terminal session id and close sessions that no longer matter. An inferred_idle or timeout result does not prove the foreground command exited.
 ```
 
 #### Token 影响

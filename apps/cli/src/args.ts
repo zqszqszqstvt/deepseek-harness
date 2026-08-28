@@ -64,7 +64,7 @@ const collect = (value: string, previous: string[] = []): string[] => [...previo
 const HELP_EXAMPLES = `
 Examples:
   dsh --profile web                          boot the web profile (same as: dsh web)
-  dsh server                                 boot the multi-user server profile
+  dsh server                                 boot the Linux-only multi-user server profile
   dsh --profile headless "run the tests"     answer one task, print the result, and exit
   dsh --profile tui --patch ./extra.yml      boot a custom profile with one extra overlay
   dsh --profile tui --resume <session>       arguments after the launcher flags reach the app
@@ -169,7 +169,7 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
       resolved = resolveBoot(web, 'web', options, args)
     })
 
-  const server = program.command('server').description('boot the multi-user server profile; the server app\'s own flags follow')
+  const server = program.command('server').description('boot the Linux-only multi-user server profile; the server app\'s own flags follow')
   server
     .helpOption(false)
     .allowUnknownOption()

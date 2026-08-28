@@ -2615,6 +2615,8 @@ export interface Config {
 export interface Config {
   /** Whether an over-cap `glob` page is sampled across top-level entries instead of taking the modification-time head. */
   sampleOverCapGlobResults: boolean
+  /** Restrict explicit `glob`/`grep` search roots to the canonical session workdir. Intended for workspace-isolated deployments. */
+  strictReads?: boolean
   /** Max paths one `glob` call retains inline; later paths go to the formatted spill file. */
   globMaxResults?: number
   /** Max flat matches one `grep` call retains inline; later matches go to the formatted spill file. */
