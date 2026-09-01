@@ -118,6 +118,12 @@ flowchart LR
   svc_e2b["ctx.e2b<br/>E2B sandbox lifecycle owner"]
   pkg_fs_e2b["fs-e2b"]
   pkg_subprocess_e2b["subprocess-e2b"]
+  pkg_server["server"]
+  svc_cloudExecution["ctx.cloudExecution<br/>Isolated cloud execution bridge"]
+  svc_executorBroker["ctx.executorBroker<br/>Local executor broker"]
+  svc_serverEnvironments["ctx.serverEnvironments<br/>Project execution environment registry"]
+  svc_serverRuntimeRouter["ctx.serverRuntimeRouter<br/>Session-aware runtime dispatcher"]
+  svc_serverStartup["ctx.serverStartup<br/>Parsed Server startup values"]
   pkg_subprocess["subprocess"]
   svc_subprocess["ctx.subprocess<br/>Subprocess seam"]
   pkg_subprocess_local["subprocess-local"]
@@ -253,6 +259,11 @@ flowchart LR
   pkg_sandbox --> svc_sandbox
   pkg_sandbox_local --> svc_sandbox
   pkg_sandbox_policy --> svc_sandboxPolicy
+  pkg_server --> svc_cloudExecution
+  pkg_server --> svc_executorBroker
+  pkg_server --> svc_serverEnvironments
+  pkg_server --> svc_serverRuntimeRouter
+  pkg_server --> svc_serverStartup
   pkg_session --> svc_sessions
   pkg_session_persistence --> svc_sessionPersistence
   pkg_session_persistence_jsonl --> svc_sessionPersistence
@@ -320,6 +331,7 @@ flowchart LR
   svc_attachments --> pkg_llm_pi_ai
   svc_authorization --> pkg_llm_pi_ai
   svc_clientModules --> pkg_hmr
+  svc_cloudExecution --> pkg_server
   svc_codeRuntime --> pkg_tools
   svc_compaction --> pkg_compaction_basic
   svc_cordisInspect --> pkg_tool_cordis
@@ -330,6 +342,7 @@ flowchart LR
   svc_dynamicCordisRunner --> pkg_tool_cordis
   svc_e2b --> pkg_fs_e2b
   svc_e2b --> pkg_subprocess_e2b
+  svc_executorBroker --> pkg_server
   svc_fs --> pkg_tool_fs
   svc_invariants --> pkg_agent
   svc_invariants --> pkg_agent_loop
@@ -347,6 +360,9 @@ flowchart LR
   svc_sandboxPolicy --> pkg_bash_sandbox
   svc_sandboxPolicy --> pkg_fs_sandbox
   svc_sandboxPolicy --> pkg_terminal_bash
+  svc_serverEnvironments --> pkg_server
+  svc_serverRuntimeRouter --> pkg_server
+  svc_serverStartup --> pkg_server
   svc_sessionPersistence --> pkg_agent_loop
   svc_sessionPersistence --> pkg_hooks_claude_code
   svc_sessionPersistence --> pkg_hooks_codex
@@ -460,6 +476,11 @@ flowchart LR
 | `ctx.agentLoop` | `bundle` | [`agent-loop`](../packages/core/agent-loop) | - | [`agent-spine-demo`](../packages/examples/agent-spine-demo) | - | The one concrete loop plugin; extension packages depend on dsh-agent events and services, not on this package. |
 | `ctx.goals` | `core` | [`goal`](../packages/goal/goal) | - | - | - | Folds revisioned objective state from the session log and keeps live continuation activation process-local. |
 | `ctx.e2b` | `core` | [`e2b`](../packages/e2b/e2b) | - | [`fs-e2b`](../packages/e2b/fs-e2b), [`subprocess-e2b`](../packages/e2b/subprocess-e2b) | - | Owns one shared E2B SDK handle, remote working directory, and final sandbox disposition so both fundamental E2B providers inhabit the same Linux runtime. |
+| `ctx.cloudExecution` | `core` | [`server`](../packages/bundle/server) | - | [`server`](../packages/bundle/server) | - | Captures the Server cloud filesystem, subprocess, and shell Providers inside an isolated realm so the root runtime routers can dispatch without exposing or replacing them. |
+| `ctx.executorBroker` | `core` | [`server`](../packages/bundle/server) | - | [`server`](../packages/bundle/server) | - | Owns authenticated-by-routing executor connections, correlates bounded local operations, and rejects responses whose binding or environment epoch no longer matches the request. |
+| `ctx.serverEnvironments` | `core` | [`server`](../packages/bundle/server) | - | [`server`](../packages/bundle/server) | - | Owns durable active bindings, process-local executor availability, and execution leases for deterministic Server project Sessions. |
+| `ctx.serverRuntimeRouter` | `core` | [`server`](../packages/bundle/server) | - | [`server`](../packages/bundle/server) | - | Resolves the initiating Agent Session to one binding and epoch, then dispatches through the exact cloud Provider or local executor without fallback. |
+| `ctx.serverStartup` | `core` | [`server`](../packages/bundle/server) | - | [`server`](../packages/bundle/server) | - | Publishes validated command-line deployment values before the Server HTTP and persistence plugins are composed. |
 | `ctx.subprocess` | `seam` | [`subprocess`](../packages/subprocess/subprocess) | [`subprocess-local`](../packages/subprocess/subprocess-local), [`subprocess-e2b`](../packages/e2b/subprocess-e2b) | [`bash-local`](../packages/shell/bash-local), [`bash-sandbox`](../packages/shell/bash-sandbox), [`terminal-bash`](../packages/terminal/terminal-bash), [`lsp-stdio`](../packages/lsp/lsp-stdio), [`subagent-acp`](../packages/subagent/subagent-acp), [`subagent-codex`](../packages/subagent/subagent-codex), [`subagent-claude-code`](../packages/subagent/subagent-claude-code) | - | The bash executors, the PTY shell backend, the LSP host, and the out-of-process ACP, Codex, and Claude Code subagent backends spawn through ctx.subprocess; the service owns process coordinates, tree/session lifetime, stdio dispositions, terminal mechanics, and kill escalation. |
 | `ctx.shell` | `seam` | [`shell`](../packages/shell/shell) | [`bash-local`](../packages/shell/bash-local), [`bash-sandbox`](../packages/shell/bash-sandbox), [`pwsh-local`](../packages/shell/pwsh-local) | [`tool-bash`](../packages/shell/tool-bash), [`tool-pwsh`](../packages/shell/tool-pwsh), [`hooks-claude-code`](../packages/hooks/hooks-claude-code), [`hooks-codex`](../packages/hooks/hooks-codex) | - | The model-facing shell tools and hook bridges consume this seam; sandboxed, remote, or PowerShell executors replace bash-local without touching them. |
 | `ctx.shellEnv` | `core` | [`shell-env`](../packages/shell/shell-env) | - | [`tool-bash`](../packages/shell/tool-bash), [`tool-pwsh`](../packages/shell/tool-pwsh) | - | Plugins declare effect-scoped DSH_* facts; each shell tool collects one trusted snapshot per execution and its executor rebuilds the namespace. |

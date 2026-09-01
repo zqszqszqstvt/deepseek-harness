@@ -120,6 +120,12 @@ flowchart LR
   svc_e2b["ctx.e2b<br/>E2B sandbox lifecycle owner"]
   pkg_fs_e2b["fs-e2b"]
   pkg_subprocess_e2b["subprocess-e2b"]
+  pkg_server["server"]
+  svc_cloudExecution["ctx.cloudExecution<br/>Isolated cloud execution bridge"]
+  svc_executorBroker["ctx.executorBroker<br/>Local executor broker"]
+  svc_serverEnvironments["ctx.serverEnvironments<br/>Project execution environment registry"]
+  svc_serverRuntimeRouter["ctx.serverRuntimeRouter<br/>Session-aware runtime dispatcher"]
+  svc_serverStartup["ctx.serverStartup<br/>Parsed Server startup values"]
   pkg_subprocess["subprocess"]
   svc_subprocess["ctx.subprocess<br/>Subprocess seam"]
   pkg_subprocess_local["subprocess-local"]
@@ -255,6 +261,11 @@ flowchart LR
   pkg_sandbox --> svc_sandbox
   pkg_sandbox_local --> svc_sandbox
   pkg_sandbox_policy --> svc_sandboxPolicy
+  pkg_server --> svc_cloudExecution
+  pkg_server --> svc_executorBroker
+  pkg_server --> svc_serverEnvironments
+  pkg_server --> svc_serverRuntimeRouter
+  pkg_server --> svc_serverStartup
   pkg_session --> svc_sessions
   pkg_session_persistence --> svc_sessionPersistence
   pkg_session_persistence_jsonl --> svc_sessionPersistence
@@ -322,6 +333,7 @@ flowchart LR
   svc_attachments --> pkg_llm_pi_ai
   svc_authorization --> pkg_llm_pi_ai
   svc_clientModules --> pkg_hmr
+  svc_cloudExecution --> pkg_server
   svc_codeRuntime --> pkg_tools
   svc_compaction --> pkg_compaction_basic
   svc_cordisInspect --> pkg_tool_cordis
@@ -332,6 +344,7 @@ flowchart LR
   svc_dynamicCordisRunner --> pkg_tool_cordis
   svc_e2b --> pkg_fs_e2b
   svc_e2b --> pkg_subprocess_e2b
+  svc_executorBroker --> pkg_server
   svc_fs --> pkg_tool_fs
   svc_invariants --> pkg_agent
   svc_invariants --> pkg_agent_loop
@@ -349,6 +362,9 @@ flowchart LR
   svc_sandboxPolicy --> pkg_bash_sandbox
   svc_sandboxPolicy --> pkg_fs_sandbox
   svc_sandboxPolicy --> pkg_terminal_bash
+  svc_serverEnvironments --> pkg_server
+  svc_serverRuntimeRouter --> pkg_server
+  svc_serverStartup --> pkg_server
   svc_sessionPersistence --> pkg_agent_loop
   svc_sessionPersistence --> pkg_hooks_claude_code
   svc_sessionPersistence --> pkg_hooks_codex
@@ -462,6 +478,11 @@ flowchart LR
 | `ctx.agentLoop` | `bundle` | [`agent-loop`](../packages/core/agent-loop) | - | [`agent-spine-demo`](../packages/examples/agent-spine-demo) | - | 唯一的具体循环插件；扩展包依赖 dsh-agent 的事件和服务，而不依赖此包。 |
 | `ctx.goals` | `core` | [`goal`](../packages/goal/goal) | - | - | - | 从会话日志折叠带修订版本的目标状态，并将实时延续激活保留在进程本地。 |
 | `ctx.e2b` | `core` | [`e2b`](../packages/e2b/e2b) | - | [`fs-e2b`](../packages/e2b/fs-e2b), [`subprocess-e2b`](../packages/e2b/subprocess-e2b) | - | 拥有一个共享的 E2B SDK 句柄、远程工作目录和最终沙箱处置，使两个基础 E2B 提供方处于同一个 Linux 运行时中。 |
+| `ctx.cloudExecution` | `core` | [`server`](../packages/bundle/server) | - | [`server`](../packages/bundle/server) | - | 捕获隔离 realm 中的 Server 云端文件系统、子进程和 shell Provider，使根运行时路由器无需暴露或替换它们即可分派。 |
+| `ctx.executorBroker` | `core` | [`server`](../packages/bundle/server) | - | [`server`](../packages/bundle/server) | - | 管理通过路由鉴别的执行器连接、关联有界本地操作，并拒绝 binding 或环境 epoch 与请求不再匹配的响应。 |
+| `ctx.serverEnvironments` | `core` | [`server`](../packages/bundle/server) | - | [`server`](../packages/bundle/server) | - | 为确定性的 Server 项目 Session 管理持久活动 binding、进程本地执行器可用状态和执行租约。 |
+| `ctx.serverRuntimeRouter` | `core` | [`server`](../packages/bundle/server) | - | [`server`](../packages/bundle/server) | - | 将发起调用的 Agent Session 解析到一个 binding 和 epoch，再通过确切的云端 Provider 或本地执行器分派，且不进行回退。 |
+| `ctx.serverStartup` | `core` | [`server`](../packages/bundle/server) | - | [`server`](../packages/bundle/server) | - | 在组合 Server HTTP 和持久化插件前发布已校验的命令行部署值。 |
 | `ctx.subprocess` | `seam` | [`subprocess`](../packages/subprocess/subprocess) | [`subprocess-local`](../packages/subprocess/subprocess-local), [`subprocess-e2b`](../packages/e2b/subprocess-e2b) | [`bash-local`](../packages/shell/bash-local), [`bash-sandbox`](../packages/shell/bash-sandbox), [`terminal-bash`](../packages/terminal/terminal-bash), [`lsp-stdio`](../packages/lsp/lsp-stdio), [`subagent-acp`](../packages/subagent/subagent-acp), [`subagent-codex`](../packages/subagent/subagent-codex), [`subagent-claude-code`](../packages/subagent/subagent-claude-code) | - | Bash 执行器、PTY shell 后端、LSP Host，以及进程外 ACP、Codex 和 Claude Code subagent 后端都通过 ctx.subprocess 执行 spawn；该服务负责进程坐标、进程树／会话生命周期、stdio 处置、终端机制和 kill 升级。 |
 | `ctx.shell` | `seam` | [`shell`](../packages/shell/shell) | [`bash-local`](../packages/shell/bash-local), [`bash-sandbox`](../packages/shell/bash-sandbox), [`pwsh-local`](../packages/shell/pwsh-local) | [`tool-bash`](../packages/shell/tool-bash), [`tool-pwsh`](../packages/shell/tool-pwsh), [`hooks-claude-code`](../packages/hooks/hooks-claude-code), [`hooks-codex`](../packages/hooks/hooks-codex) | - | 面向模型的 shell 工具和钩子桥接消费此 seam；沙箱、远程或 PowerShell 执行器可以替换 bash-local，而无需改动这些消费方。 |
 | `ctx.shellEnv` | `core` | [`shell-env`](../packages/shell/shell-env) | - | [`tool-bash`](../packages/shell/tool-bash), [`tool-pwsh`](../packages/shell/tool-pwsh) | - | 插件声明限定于 effect 作用域的 DSH_* 事实；每个 shell 工具在每次执行时收集一份可信快照，其执行器据此重建命名空间。 |

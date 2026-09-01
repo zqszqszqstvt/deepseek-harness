@@ -1721,7 +1721,7 @@ export interface JsonRpcConfig {
 
 ## `@deepseek-ai/dsh-server`
 
-需要：`webServer` · `apiProxy` · `agents` · `sessions` · `serverStartup`
+需要：`webServer` · `apiProxy` · `agents` · `sessions` · `serverStartup` · `serverEnvironments`
 
 ```ts config-catalog
 /** Multi-user HTTP Server runtime config resolved by the startup plugin and Loader. */
@@ -1743,7 +1743,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/bundle/server/src/index.ts:164`](../packages/bundle/server/src/index.ts)
+来源：[`packages/bundle/server/src/index.ts:133`](../packages/bundle/server/src/index.ts)
 
 <a id="deepseek-aidsh-session-persistence-jsonl"></a>
 
@@ -2926,7 +2926,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/terminal/tool-terminal/src/index.ts:36`](../packages/terminal/tool-terminal/src/index.ts)
+来源：[`packages/terminal/tool-terminal/src/index.ts:35`](../packages/terminal/tool-terminal/src/index.ts)
 
 <a id="deepseek-aidsh-tool-todo"></a>
 
@@ -3371,6 +3371,7 @@ export interface Config {
 - `@deepseek-ai/dsh-client-web`（[`packages/client/web/src/index.ts`](../packages/client/web/src/index.ts)）
 - `@deepseek-ai/dsh-cmdline`（[`packages/boot/cmdline/src/index.ts`](../packages/boot/cmdline/src/index.ts)）
 - `@deepseek-ai/dsh-code-runtime-python`（[`packages/code-runtime/code-runtime-python/src/index.ts`](../packages/code-runtime/code-runtime-python/src/index.ts)）
+- `@deepseek-ai/dsh-executor-protocol`（[`packages/executor/executor-protocol/src/index.ts`](../packages/executor/executor-protocol/src/index.ts)）
 - `@deepseek-ai/dsh-home-paths`（[`packages/util/home-paths/src/index.ts`](../packages/util/home-paths/src/index.ts)）
 - `@deepseek-ai/dsh-hook-protocol`（[`packages/hooks/hook-protocol/src/index.ts`](../packages/hooks/hook-protocol/src/index.ts)）
 - `@deepseek-ai/dsh-launch-environment`（[`packages/util/launch-environment/src/index.ts`](../packages/util/launch-environment/src/index.ts)）

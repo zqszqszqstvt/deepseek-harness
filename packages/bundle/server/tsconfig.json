@@ -7,10 +7,27 @@
     { "path": "../../../vendor/schemastery" },
     { "path": "../../boot/app-boot" },
     { "path": "../../boot/cmdline" },
+    { "path": "../../executor/executor-protocol" },
+    { "path": "../../fs/fs" },
+    { "path": "../../fs/fs-sandbox" },
+    { "path": "../../jobs/jobs" },
+    { "path": "../../sandbox/sandbox" },
+    { "path": "../../sandbox/sandbox-policy" },
+    { "path": "../../shell/bash-sandbox" },
+    { "path": "../../shell/pwsh-sandbox" },
+    { "path": "../../shell/shell" },
+    { "path": "../../shell/shell-env" },
+    { "path": "../../subprocess/subprocess" },
+    { "path": "../../subprocess/subprocess-local" },
+    { "path": "../../util/brand" },
     { "path": "../../core/agent" },
+    { "path": "../../core/system-prompt" },
+    { "path": "../../core/tools" },
+    { "path": "../../llm/llm" },
     { "path": "../../host/apiproxy" },
     { "path": "../../host/webserver" },
     { "path": "../../runtime-diagnostics/invariants" },
-    { "path": "../../session/session-persistence-jsonl" }
+    { "path": "../../session/session-persistence-jsonl" },
+    { "path": "../../storage/storage-domain" }
   ]
 }

@@ -196,11 +196,11 @@ The sandbox-policy service (`ctx.sandboxPolicy`). Owns the deployment default mo
 
 ```ts cordis-catalog
 /**
- * Resolve the complete policy for one capability call. An approved explicit
- * mode outranks the session's last `sandbox/mode` event, which outranks the
- * deployment default. A session cwd is its workspace-write boundary; the
- * configured root is the fallback for agentless calls and sessions without a
- * cwd.
+ * Resolve the complete policy for one capability call. An explicit mode
+ * outranks the session's last `sandbox/mode` event, which outranks the
+ * deployment default; `maximumMode` caps every source. A session cwd is its
+ * workspace-write boundary; the configured root is the fallback for
+ * agentless calls and sessions without a cwd.
  * @param request - optional session and approved mode override.
  * @returns the fully resolved per-call mode and absolute workspace root.
  */

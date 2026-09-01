@@ -21,6 +21,67 @@
     - id: server-startup
       name: '@deepseek-ai/dsh-server/startup'
 
+    - id: server-environments
+      name: '@deepseek-ai/dsh-server/environments'
+
+    - id: server-environment-context
+      name: '@deepseek-ai/dsh-server/environment-context'
+      inject: [serverEnvironments]
+
+    - id: tool-server-environment
+      name: '@deepseek-ai/dsh-server/tool-environment'
+      inject: [serverEnvironments]
+
+    - id: executor-broker
+      name: '@deepseek-ai/dsh-server/executor-broker'
+      inject: [serverEnvironments]
+
+    - id: server-cloud-execution
+      name: cordis:group
+      group: true
+      isolate:
+        fs: true
+        subprocess: true
+        shell: true
+      config:
+        - id: cloud-subprocess
+          name: '@deepseek-ai/dsh-subprocess-local'
+
+        - id: cloud-fs
+          name: '@deepseek-ai/dsh-fs-sandbox'
+          config:
+            strictReads: true
+
+        - id: cloud-bash
+          name: '@deepseek-ai/dsh-bash-sandbox'
+          disabled: !!js process.platform === 'win32'
+          config:
+            timeoutMs: 60000
+
+        - id: cloud-pwsh
+          name: '@deepseek-ai/dsh-pwsh-sandbox'
+          disabled: !!js process.platform !== 'win32'
+
+        - id: cloud-execution-bridge
+          name: '@deepseek-ai/dsh-server/cloud-execution'
+
+    - id: server-runtime-router
+      name: '@deepseek-ai/dsh-server/runtime-router'
+
+    - id: server-fs-router
+      name: '@deepseek-ai/dsh-server/fs-router'
+
+    - id: server-subprocess-router
+      name: '@deepseek-ai/dsh-server/subprocess-router'
+
+    - id: server-shell-router
+      name: '@deepseek-ai/dsh-server/shell-router'
+      config:
+        maxTimeoutMs: 120000
+
+    - id: tool-server-shell
+      name: '@deepseek-ai/dsh-server/tool-shell'
+
     - id: api-gateway
       name: '@deepseek-ai/dsh-host-apiproxy'
       config:
@@ -35,7 +96,7 @@
 
     - id: server-runtime
       name: '@deepseek-ai/dsh-server'
-      inject: [serverStartup]
+      inject: [serverStartup, serverEnvironments]
       config:
         host: !!js ctx.serverStartup.host ?? '127.0.0.1'
         port: !!js ctx.serverStartup.port ?? 3080
@@ -46,6 +107,24 @@
         sseClientBufferBytes: !!js ctx.serverStartup.sseClientBufferBytes
 
 - id: session-persistence-jsonl
+  disabled: true
+
+- id: subprocess
+  disabled: true
+
+- id: bash-sandbox
+  disabled: true
+
+- id: pwsh-sandbox
+  disabled: true
+
+- id: fs-sandbox
+  disabled: true
+
+- id: tool-bash
+  disabled: true
+
+- id: tool-pwsh
   disabled: true
 
 - insert:

@@ -12,6 +12,7 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as Server from '../src/index.ts'
 import type { ServerStartupValues } from '../src/startup.ts'
+import { provideCloudEnvironment } from './environment-testkit.ts'
 import { getJson, postJson } from './http-testkit.ts'
 
 interface PromptCall { sessionId: string; mode: 'queue' | 'steer'; message: string }
@@ -49,9 +50,11 @@ afterEach(async () => {
   dataDir = undefined
 })
 
-function sessionIdFor(userId: string): string {
+function sessionIdFor(userId: string, projectId = 'default'): string {
   const key = createHash('sha256').update(userId).digest('hex')
-  return `mu_${key.slice(0, 40)}`
+  if (projectId === 'default') return `mu_${key.slice(0, 40)}`
+  const projectKey = createHash('sha256').update(`${userId}\0${projectId}`).digest('hex')
+  return `mp_${projectKey.slice(0, 40)}`
 }
 
 async function start(limit: number): Promise<{
@@ -91,6 +94,7 @@ async function start(limit: number): Promise<{
   } as unknown as ApiProxy
   context.provide('apiProxy', api)
   context.provide('agents', { get: (sessionId: string) => agents.get(sessionId) } as never)
+  provideCloudEnvironment(context)
   context.provide('serverStartup', {
     dataDir,
     sessionsDir: join(dataDir, 'sessions'),
@@ -107,8 +111,15 @@ async function start(limit: number): Promise<{
   return { port: context.webServer.port, agents, created, prompts }
 }
 
-function postTurn(port: number, userId: string, message: string, mode: 'queue' | 'steer' = 'queue'): Promise<{ status: number; body: unknown }> {
-  return postJson(port, `/v1/users/${encodeURIComponent(userId)}/turns`, { message, mode })
+function postTurn(
+  port: number,
+  userId: string,
+  message: string,
+  mode: 'queue' | 'steer' = 'queue',
+  projectId?: string,
+): Promise<{ status: number; body: unknown }> {
+  const projectPath = projectId === undefined ? '' : `/projects/${encodeURIComponent(projectId)}`
+  return postJson(port, `/v1/users/${encodeURIComponent(userId)}${projectPath}/turns`, { message, mode })
 }
 
 describe('server turn concurrency', () => {
@@ -156,6 +167,23 @@ describe('server turn concurrency', () => {
         sseConnections: 0, sseConnectionLimit: 8, sseMuxState: 'idle',
       },
     })
+  })
+
+  it('runs different projects for one user independently', async () => {
+    const harness = await start(2)
+    const alpha = postTurn(harness.port, 'alice', 'alpha work', 'queue', 'alpha')
+    const beta = postTurn(harness.port, 'alice', 'beta work', 'queue', 'beta')
+
+    await vi.waitFor(() => expect(harness.prompts).toHaveLength(2))
+    expect(harness.prompts.map(call => call.sessionId).sort()).toEqual([
+      sessionIdFor('alice', 'alpha'),
+      sessionIdFor('alice', 'beta'),
+    ].sort())
+
+    harness.agents.get(sessionIdFor('alice', 'alpha'))?.finish()
+    harness.agents.get(sessionIdFor('alice', 'beta'))?.finish()
+    await expect(alpha).resolves.toEqual({ status: 200, body: { ok: true, value: { accepted: true } } })
+    await expect(beta).resolves.toEqual({ status: 200, body: { ok: true, value: { accepted: true } } })
   })
 
   it('admits steering into a running turn without waiting for its idle boundary', async () => {

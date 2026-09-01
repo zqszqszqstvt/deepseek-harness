@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as Server from '../src/index.ts'
 import { ServerSseMux } from '../src/sse-mux.ts'
 import type { ServerStartupValues } from '../src/startup.ts'
+import { provideCloudEnvironment } from './environment-testkit.ts'
 import { getJson, openSse } from './http-testkit.ts'
 import type { SseProbe } from './http-testkit.ts'
 
@@ -118,6 +119,7 @@ async function start(
   const sseClientBufferBytes = limits.bufferBytes ?? 64 * 1024
   context.provide('apiProxy', api)
   context.provide('agents', { get: () => undefined } as never)
+  provideCloudEnvironment(context)
   context.provide('serverStartup', {
     dataDir,
     sessionsDir: join(dataDir, 'sessions'),

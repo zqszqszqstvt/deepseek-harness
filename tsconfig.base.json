@@ -131,6 +131,7 @@
         "./packages/spill/*/src/invariant.ts",
         "./packages/todo/*/src/invariant.ts",
         "./packages/bundle/*/src/invariant.ts",
+        "./packages/executor/*/src/invariant.ts",
         "./packages/extensions/*/src/invariant.ts",
         "./packages/sandbox/*/src/invariant.ts",
         "./packages/hooks/*/src/invariant.ts",
@@ -159,6 +160,7 @@
       "@deepseek-ai/dsh-web-app/startup": ["./packages/bundle/web-app/src/startup.ts"],
       "@deepseek-ai/dsh-server/startup": ["./packages/bundle/server/src/startup.ts"],
       "@deepseek-ai/dsh-server/session-persistence": ["./packages/bundle/server/src/session-persistence.ts"],
+      "@deepseek-ai/dsh-server/*": ["./packages/bundle/server/src/*"],
       "@deepseek-ai/dsh-client-*/client": ["./packages/client/*/src/client"],
        // One wildcard maps every @deepseek-ai/dsh-<name> to its source. Package
       // dir names are unique across groups, so first-on-disk-wins resolution is
@@ -268,6 +270,7 @@
         "./packages/spill/*/src",
         "./packages/todo/*/src",
         "./packages/bundle/*/src",
+        "./packages/executor/*/src",
         "./packages/extensions/*/src",
         "./packages/sandbox/*/src",
         "./packages/hooks/*/src",

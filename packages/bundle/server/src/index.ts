@@ -1,47 +1,46 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { SessionId } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import {
+  decodeResourceId,
+  isProjectWorkspace,
+  parseProjectRoute,
+  projectSessionState,
+  type ProjectSessionState,
+} from './project-session.ts'
+import {
+  ServerBindingId,
+  ServerEnvironmentBusyError,
+  ServerEnvironmentUnavailableError,
+} from './environments.ts'
+import type {} from './environments.ts'
 import { ServerSseMux } from './sse-mux.ts'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-apiproxy'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 
 export const name = 'server'
-export const inject = ['webServer', 'apiProxy', 'agents', 'sessions', 'serverStartup']
+export const inject = ['webServer', 'apiProxy', 'agents', 'sessions', 'serverStartup', 'serverEnvironments']
 
 const MAX_BODY_BYTES = 1024 * 1024
 const PUBLIC_SERVER_ERROR = 'server request failed'
 
-interface UserState { userId: string; key: string; cwd: string; sessionId: ReturnType<typeof SessionId> }
 interface TurnBody { message?: unknown; mode?: unknown }
 interface ApprovalBody { rpcId?: unknown; outcome?: unknown }
+interface EnvironmentSwitchBody { bindingId?: unknown }
 
-function userState(root: string, userId: string): UserState {
-  const key = createHash('sha256').update(userId).digest('hex')
-  return { userId, key, cwd: join(root, 'users', key, 'workspace'), sessionId: SessionId(`mu_${key.slice(0, 40)}`) }
-}
-
-function isServerWorkspace(cwd: string | undefined, key: string): boolean {
-  if (cwd === undefined) return false
-  const userDir = dirname(resolve(cwd))
-  return basename(resolve(cwd)) === 'workspace'
-    && basename(userDir) === key
-    && basename(dirname(userDir)) === 'users'
-}
-
-async function ensureUser(state: UserState, api: ApiProxy, persistence: unknown): Promise<void> {
+async function ensureProject(state: ProjectSessionState, api: ApiProxy, persistence: unknown): Promise<void> {
   await mkdir(state.cwd, { recursive: true })
   if (persistence instanceof JsonlSessionPersistence) {
     const stored = await persistence.readRaw(state.sessionId)
     if (stored !== undefined && stored.meta.cwd !== state.cwd) {
-      if (!isServerWorkspace(stored.meta.cwd, state.key)) {
+      if (!isProjectWorkspace(stored.meta.cwd, state)) {
         throw new Error(`server session "${state.sessionId}" belongs to unexpected cwd ${JSON.stringify(stored.meta.cwd)}`)
       }
       await persistence.relocateStoredSessionCwd(state.sessionId, state.cwd)
@@ -71,36 +70,6 @@ function json(res: ServerResponse, status: number, value: unknown): void {
   const body = JSON.stringify(value)
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) })
   res.end(body)
-}
-
-function userIdFrom(pathname: string): string | undefined {
-  const match = /^\/v1\/users\/([^/]+)(?:\/.*)?$/.exec(pathname)
-  if (match === null) return undefined
-  try {
-    return decodeURIComponent(match[1] as string)
-  } catch {
-    return undefined
-  }
-}
-
-function approvalIdFrom(pathname: string): string | undefined {
-  const match = /^\/v1\/users\/[^/]+\/approvals\/([^/]+)$/.exec(pathname)
-  if (match === null) return undefined
-  try {
-    return decodeURIComponent(match[1] as string)
-  } catch {
-    return undefined
-  }
-}
-
-function questionRpcIdFrom(pathname: string): string | undefined {
-  const match = /^\/v1\/users\/[^/]+\/questions\/([^/]+)$/.exec(pathname)
-  if (match === null) return undefined
-  try {
-    return decodeURIComponent(match[1] as string)
-  } catch {
-    return undefined
-  }
 }
 
 function sendResult(ctx: Context, res: ServerResponse, operation: string, result: { ok: boolean; [key: string]: unknown }): void {
@@ -134,7 +103,7 @@ async function writeSse(res: ServerResponse, chunk: string | Buffer): Promise<bo
 
 async function eventsFor(
   mux: ServerSseMux,
-  state: UserState,
+  state: ProjectSessionState,
   lastSeq: number,
   res: ServerResponse,
 ): Promise<void> {
@@ -196,14 +165,16 @@ export function apply(ctx: Context, config: Config): void {
     clientBufferBytes: sseClientBufferBytes,
   }, (error) => { reportRequestError(ctx, '/v1/users/*/events', error) })
   ctx.on('session/disposed', (session) => { sseMux.dropSession(session.id) })
-  const userInitialization = new Map<string, Promise<void>>()
-  const initializeUser = (state: UserState): Promise<void> => {
-    const pending = userInitialization.get(state.userId)
+  const projectInitialization = new Map<string, Promise<void>>()
+  const initializeProject = (state: ProjectSessionState): Promise<void> => {
+    ctx.serverEnvironments.bindProject(state)
+    const key = String(state.sessionId)
+    const pending = projectInitialization.get(key)
     if (pending !== undefined) return pending
-    const operation = ensureUser(state, ctx.apiProxy, ctx.get('sessionPersistence')).finally(() => {
-      if (userInitialization.get(state.userId) === operation) userInitialization.delete(state.userId)
+    const operation = ensureProject(state, ctx.apiProxy, ctx.get('sessionPersistence')).finally(() => {
+      if (projectInitialization.get(key) === operation) projectInitialization.delete(key)
     })
-    userInitialization.set(state.userId, operation)
+    projectInitialization.set(key, operation)
     return operation
   }
   let running = 0
@@ -240,21 +211,43 @@ export function apply(ctx: Context, config: Config): void {
       })
       return
     }
-    const userId = userIdFrom(pathname)
-    if (userId === undefined || userId.length === 0 || userId.length > 256) {
+    const projectRoute = parseProjectRoute(pathname)
+    if (projectRoute === undefined) {
       json(res, 404, { ok: false, error: 'user route not found' })
       return
     }
-    const state = userState(root, userId)
+    const state = projectSessionState(root, projectRoute.identity)
+    const resource = projectRoute.resource
     try {
-      await initializeUser(state)
-      if (pathname.endsWith('/events') && req.method === 'GET') {
+      await initializeProject(state)
+      if (resource.length === 1 && resource[0] === 'environments' && req.method === 'GET') {
+        json(res, 200, { ok: true, value: ctx.serverEnvironments.project(state) })
+        return
+      }
+      if (resource.length === 1 && resource[0] === 'environment' && req.method === 'POST') {
+        const parsedBody = await readJson(req)
+        if (typeof parsedBody !== 'object' || parsedBody === null || Array.isArray(parsedBody)) {
+          json(res, 400, { ok: false, error: 'request body must be a JSON object' })
+          return
+        }
+        const body = parsedBody as EnvironmentSwitchBody
+        if (typeof body.bindingId !== 'string' || body.bindingId.length === 0 || body.bindingId.length > 512) {
+          json(res, 400, { ok: false, error: 'bindingId must be a non-empty string' })
+          return
+        }
+        const value = await ctx.serverEnvironments.switch(state, ServerBindingId(body.bindingId))
+        json(res, 200, { ok: true, value })
+        return
+      }
+      if (resource.length === 1 && resource[0] === 'events' && req.method === 'GET') {
         const session = ctx.sessions.get(state.sessionId)
         if (session === undefined) throw new Error(`session "${state.sessionId}" is unavailable`)
         await eventsFor(sseMux, state, session.seq - 1, res)
         return
       }
-      const approvalId = approvalIdFrom(pathname)
+      const approvalId = resource.length === 2 && resource[0] === 'approvals'
+        ? decodeResourceId(resource[1])
+        : undefined
       if (approvalId !== undefined && req.method === 'POST') {
         const parsedBody = await readJson(req)
         if (typeof parsedBody !== 'object' || parsedBody === null || Array.isArray(parsedBody)) {
@@ -285,7 +278,9 @@ export function apply(ctx: Context, config: Config): void {
         json(res, 200, receipt)
         return
       }
-      const questionRpcId = questionRpcIdFrom(pathname)
+      const questionRpcId = resource.length === 2 && resource[0] === 'questions'
+        ? decodeResourceId(resource[1])
+        : undefined
       if (questionRpcId !== undefined && req.method === 'POST') {
         const answer = await readJson(req)
         if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {
@@ -307,17 +302,17 @@ export function apply(ctx: Context, config: Config): void {
         json(res, 200, receipt)
         return
       }
-      if (pathname.endsWith('/history') && req.method === 'GET') {
+      if (resource.length === 1 && resource[0] === 'history' && req.method === 'GET') {
         const result = await ctx.apiProxy.sessions.history({ rpcId: RpcId(randomUUID()), payload: { sessionId: state.sessionId } })
         sendResult(ctx, res, 'history', result.result)
         return
       }
-      if (pathname.endsWith('/turns') && req.method === 'DELETE') {
+      if (resource.length === 1 && resource[0] === 'turns' && req.method === 'DELETE') {
         const result = await ctx.apiProxy.sessions.cancel({ rpcId: RpcId(randomUUID()), payload: { sessionId: state.sessionId } })
         sendResult(ctx, res, 'cancel', result.result)
         return
       }
-      if (pathname.endsWith('/turns') && req.method === 'POST') {
+      if (resource.length === 1 && resource[0] === 'turns' && req.method === 'POST') {
         const body = await readJson(req) as TurnBody
         if (typeof body.message !== 'string' || body.message.length === 0) {
           json(res, 400, { ok: false, error: 'message must be a non-empty string' })
@@ -334,7 +329,8 @@ export function apply(ctx: Context, config: Config): void {
           sendResult(ctx, res, 'steer', result.result)
           return
         }
-        const previous = active.get(state.userId)
+        const activeKey = String(state.sessionId)
+        const previous = active.get(activeKey)
         const work = (async () => {
           if (previous !== undefined) {
             try {
@@ -354,17 +350,25 @@ export function apply(ctx: Context, config: Config): void {
             release()
           }
         })()
-        active.set(state.userId, work)
+        active.set(activeKey, work)
         try {
           await work
         } finally {
-          if (active.get(state.userId) === work) active.delete(state.userId)
+          if (active.get(activeKey) === work) active.delete(activeKey)
         }
         return
       }
       json(res, 404, { ok: false, error: 'user route not found' })
       return
     } catch (error) {
+      if (error instanceof ServerEnvironmentUnavailableError) {
+        json(res, 409, { ok: false, error: 'environment unavailable' })
+        return
+      }
+      if (error instanceof ServerEnvironmentBusyError) {
+        json(res, 409, { ok: false, error: 'environment busy' })
+        return
+      }
       reportRequestError(ctx, pathname, error)
       json(res, 500, { ok: false, error: PUBLIC_SERVER_ERROR })
     }

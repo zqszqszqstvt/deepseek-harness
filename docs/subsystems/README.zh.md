@@ -47,6 +47,7 @@
 | [plan.md](plan.zh.md) | 计划模式：仅记日志的 `plan/mode` 状态、待定选择的冲刷、`PlanModeConfig`、`exit_plan_mode` 审阅流程 |
 | [invariants.md](invariants.zh.md) | 运行时不变式注册表：选择配置 `Config`、`InvariantInstaller`/`InvariantFailure`、空配套插件约定 |
 | [web-server.md](web-server.zh.md) | HTTP 载体：`WebRouteKind`/`WebRoute`、匹配顺序、可认领的回退席位、index 渲染挂接点 |
+| [server.md](server.zh.md) | 多用户 Server 组合：项目 Session、执行环境、本地执行器 Broker，以及云端/本地 Provider 路由 |
 | [storage.md](storage.zh.md) | 存储子系统：后端约定（`StorageBackend`）、`StorageForms`、`DomainSpec`/`Domain`、`domain/changed` |
 | [workspace.md](workspace.zh.md) | 工作区注册表：`Workspace`/`WorkspaceId`、注册与解析、与会话 `cwd` 的关系 |
 | [client-modules.md](client-modules.zh.md) | Web 插件表：`dsh.client` 声明、`WebBootGraph` 线上组合、bundle 路由与 index 转换 |

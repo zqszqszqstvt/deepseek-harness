@@ -12,6 +12,7 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as Server from '../src/index.ts'
 import type { ServerStartupValues } from '../src/startup.ts'
+import { provideCloudEnvironment } from './environment-testkit.ts'
 import { getJson } from './http-testkit.ts'
 
 const contexts: Context[] = []
@@ -101,6 +102,7 @@ async function start(storedCwd: (root: string, key: string) => string): Promise<
   } as unknown as ApiProxy
   context.provide('apiProxy', api)
   context.provide('agents', { get: () => undefined } as never)
+  provideCloudEnvironment(context)
   context.provide('serverStartup', {
     dataDir,
     sessionsDir,

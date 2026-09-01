@@ -539,6 +539,28 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'cloudExecution',
+    summary: 'Stable bridge from root routers to the isolated cloud Providers.',
+    description: 'Stable bridge from root routers to the isolated cloud Providers.',
+    methods: [
+      {
+        signature: 'readonly fs: FileSystem',
+        description: 'Cloud filesystem Provider captured from the isolated Server group.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly subprocess: SubprocessRuntime',
+        description: 'Cloud subprocess Provider captured from the isolated Server group.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly shell: ShellExecutor',
+        description: 'Cloud shell Provider captured from the isolated Server group.',
+        parameters: [],
+      },
+    ],
+  },
+  {
     key: 'codeRuntime',
     summary: 'Registers one `ctx.codeRuntime` implementation.',
     description: 'Registers one `ctx.codeRuntime` implementation. Program, budget, abort, and substrate failures resolve in CodeRunResult; only Service Definition contract misuse rejects. Implementations bridge structured-cloneable bindings, materialize each declared namespace rejection class, treat programs as hostile peers, isolate runs from one another, and terminate and await in-flight runs during disposal.',
@@ -715,6 +737,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'executorBroker',
+    summary: 'Executor connection registry and request dispatcher.',
+    description: 'Executor connection registry and request dispatcher.',
+    methods: [
+      {
+        signature: 'execute( request: ExecutorBrokerRequest, options: ExecutorBrokerExecuteOptions = {}, ): Promise<ExecutorResultMessage[\'result\']>',
+        description: 'Execute one request on its exact registered device.',
+        parameters: [{ name: 'request', description: 'complete Session and environment ownership plus operation.' }, { name: 'options', description: 'cancellation and output observer.' }],
+        returns: 'executor\'s final structured result.',
+      },
+    ],
+  },
+  {
     key: 'fileReferences',
     summary: 'Host capability for cancellable file-reference discovery.',
     description: 'Host capability for cancellable file-reference discovery.',
@@ -769,7 +804,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'metadata only, never content; undefined for an absent target.',
       },
       {
-        signature: 'abstract lstat(path: string, opts?: { cwd?: string }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsPathInfo | undefined>',
+        signature: 'abstract lstat( path: string, opts?: { cwd?: string }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<FsPathInfo | undefined>',
         description: 'Return path metadata without following the final path component when it is a symbolic link. This is intentionally path-shaped, not target-shaped: resolve follows symlinks to produce the stable identity used by normal reads/writes, while `lstat` lets a consumer reject the path itself before that follow happens.\n\n`opts.cwd` follows resolve\'s cwd rules. `undefined` means the path is absent.',
         parameters: [{ name: 'path', description: 'the path to inspect; relative paths resolve against `opts.cwd`.' }, { name: 'opts', description: '`cwd` overrides the backend\'s default base for relative paths.' }, { name: 'signal', description: 'aborts the metadata round-trip.' }, { name: 'sandboxPolicy', description: 'optional per-call workspace boundary for a sandboxing backend.' }],
         returns: 'metadata only, never content; undefined for an absent path.',
@@ -787,7 +822,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the chunk iterable, decoded and validated like {@link readText}.',
       },
       {
-        signature: 'abstract readBytes(target: FsTarget, signal: AbortSignal | undefined, maxBytes: number, sandboxPolicy?: SandboxExecutionPolicy): Promise<Uint8Array>',
+        signature: 'abstract readBytes( target: FsTarget, signal: AbortSignal | undefined, maxBytes: number, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<Uint8Array>',
         description: 'Read the whole regular file as raw bytes with no decoding or binary rejection. The bound lives at this seam so a backend can never buffer an unbounded file: a target known or discovered to exceed `maxBytes` fails with `FS_TOO_LARGE` instead of returning a truncated result.',
         parameters: [{ name: 'target', description: 'the resolved target to read.' }, { name: 'signal', description: 'aborts the read.' }, { name: 'maxBytes', description: 'inclusive byte cap on the complete content.' }, { name: 'sandboxPolicy', description: 'optional per-call workspace boundary for a sandboxing backend.' }],
         returns: 'the full raw content, at most `maxBytes` long.',
@@ -1158,13 +1193,23 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'readonly maximumMode: SandboxMode',
+        description: 'Highest mode any default, session override, or explicit call override may resolve.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly escalationTargets: readonly Exclude<SandboxMode, \'read-only\'>[]',
+        description: 'Deployment-approved targets model-facing tools may advertise and request.',
+        parameters: [],
+      },
+      {
         signature: 'readonly workspaceRoot: string',
         description: 'The absolute `workspace-write` fallback root for calls without a session cwd.',
         parameters: [],
       },
       {
         signature: 'resolve(request: SandboxPolicyRequest = {}): SandboxExecutionPolicy',
-        description: 'Resolve the complete policy for one capability call. An approved explicit mode outranks the session\'s last `sandbox/mode` event, which outranks the deployment default. A session cwd is its workspace-write boundary; the configured root is the fallback for agentless calls and sessions without a cwd.',
+        description: 'Resolve the complete policy for one capability call. An explicit mode outranks the session\'s last `sandbox/mode` event, which outranks the deployment default; `maximumMode` caps every source. A session cwd is its workspace-write boundary; the configured root is the fallback for agentless calls and sessions without a cwd.',
         parameters: [{ name: 'request', description: 'optional session and approved mode override.' }],
         returns: 'the fully resolved per-call mode and absolute workspace root.',
       },
@@ -1173,6 +1218,137 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Read the session override without applying the deployment default.',
         parameters: [{ name: 'session', description: 'session whose log supplies the override.' }],
         returns: 'the last logged mode, or `undefined` without one.',
+      },
+    ],
+  },
+  {
+    key: 'serverEnvironments',
+    summary: 'Server-owned environment registry.',
+    description: 'Server-owned environment registry. Active binding state is durable; local device facts exist only while the executor connection owns its registration.',
+    methods: [
+      {
+        signature: 'registerExecutor(registration: LocalExecutorRegistration): () => void',
+        description: 'Publish one connected executor until the returned disposer runs.',
+        parameters: [{ name: 'registration', description: 'validated device facts and project workspaces.' }],
+        returns: 'disposer that removes only this exact registration.',
+      },
+      {
+        signature: 'bindProject(state: ProjectSessionState): void',
+        description: 'Associate one deterministic Server Session with its validated project identity. Repeated route access is idempotent; a conflicting identity fails closed.',
+        parameters: [{ name: 'state', description: 'validated project Session state derived from the Server route.' }],
+      },
+      {
+        signature: 'projectForSession(sessionId: string): { readonly state: ProjectSessionState readonly view: ProjectEnvironmentsView } | undefined',
+        description: 'Resolve the current environment view from a live Agent Session id.',
+        parameters: [{ name: 'sessionId', description: 'deterministic Server Session id.' }],
+        returns: 'current project state and environment view, or undefined outside Server-owned Sessions.',
+      },
+      {
+        signature: 'async switchForSession(sessionId: string, bindingId: ServerBindingId): Promise<ProjectEnvironmentsView>',
+        description: 'Commit an approved switch for a live Agent Session.',
+        parameters: [{ name: 'sessionId', description: 'deterministic Server Session id.' }, { name: 'bindingId', description: 'requested available binding.' }],
+        returns: 'committed environment projection.',
+      },
+      {
+        signature: 'leaseExecution( sessionId: string, bindingId: ServerBindingId, environmentEpoch: number, ): () => void',
+        description: 'Hold the exact active binding and epoch for one tool operation.',
+        parameters: [{ name: 'sessionId', description: 'owning Server Session.' }, { name: 'bindingId', description: 'binding selected before the operation starts.' }, { name: 'environmentEpoch', description: 'epoch selected before the operation starts.' }],
+        returns: 'idempotent release callback.',
+      },
+      {
+        signature: 'project(state: ProjectSessionState): ProjectEnvironmentsView',
+        description: 'Project the durable selection and currently connected environments.',
+        parameters: [{ name: 'state', description: 'project Session identity and cloud workspace.' }],
+        returns: 'current environment view; an unavailable selected local binding remains visible as offline.',
+      },
+      {
+        signature: 'async switch(state: ProjectSessionState, bindingId: ServerBindingId): Promise<ProjectEnvironmentsView>',
+        description: 'Commit a user-approved environment switch after verifying availability.',
+        parameters: [{ name: 'state', description: 'project Session whose active binding changes.' }, { name: 'bindingId', description: 'requested binding from the current project view.' }],
+        returns: 'the committed environment view.',
+      },
+    ],
+  },
+  {
+    key: 'serverRuntimeRouter',
+    summary: 'Session-aware dispatcher shared by FS, subprocess, and Shell routers.',
+    description: 'Session-aware dispatcher shared by FS, subprocess, and Shell routers.',
+    methods: [
+      {
+        signature: 'readonly cloud: CloudExecution',
+        description: 'Cloud Providers retained behind the root routing services.',
+        parameters: [],
+      },
+      {
+        signature: 'current(): ServerRuntimeSelection',
+        description: 'Resolve the initiating Agent to its exact current environment.',
+        parameters: [],
+        returns: 'current project, binding, epoch, and environment facts.',
+      },
+      {
+        signature: 'lease(selection: ServerRuntimeSelection): () => void',
+        description: 'Acquire an environment-switch exclusion lease for one operation.',
+        parameters: [{ name: 'selection', description: 'environment snapshot captured before the operation.' }],
+        returns: 'idempotent lease release callback.',
+      },
+      {
+        signature: 'async run<T>( selection: ServerRuntimeSelection, operation: () => Promise<T>, ): Promise<T>',
+        description: 'Run one finite cloud or local operation under an environment-switch exclusion lease.',
+        parameters: [{ name: 'selection', description: 'environment snapshot captured before the operation.' }, { name: 'operation', description: 'finite operation to execute while the lease is held.' }],
+        returns: 'operation result after releasing the lease.',
+      },
+      {
+        signature: 'async executeLocal( selection: ServerRuntimeSelection, operation: ExecutorOperation, timeoutMs: number, options: ExecutorBrokerExecuteOptions = {}, ): Promise<unknown>',
+        description: 'Dispatch one structured operation to the selected local device.',
+        parameters: [{ name: 'selection', description: 'local environment snapshot captured before dispatch.' }, { name: 'operation', description: 'validated filesystem or subprocess operation.' }, { name: 'timeoutMs', description: 'maximum Broker request lifetime in milliseconds.' }, { name: 'options', description: 'optional cancellation signal and output observer.' }],
+        returns: 'structured successful executor value.',
+      },
+    ],
+  },
+  {
+    key: 'serverStartup',
+    summary: 'Parsed Server command-line values shared by the HTTP and persistence plugins.',
+    description: 'Parsed Server command-line values shared by the HTTP and persistence plugins.',
+    methods: [
+      {
+        signature: 'host?: \'127.0.0.1\' | \'0.0.0.0\'',
+        description: 'HTTP bind address, or undefined before the command applies its default.',
+        parameters: [],
+      },
+      {
+        signature: 'port?: number',
+        description: 'HTTP listen port, or undefined to use the consumer default.',
+        parameters: [],
+      },
+      {
+        signature: 'dataDir?: string',
+        description: 'Root for per-user workspaces and Server-owned state.',
+        parameters: [],
+      },
+      {
+        signature: 'sessionsDir: string',
+        description: 'Absolute directory for Server-owned session persistence.',
+        parameters: [],
+      },
+      {
+        signature: 'maxConcurrentTurns: number',
+        description: 'Maximum user turns allowed to execute concurrently.',
+        parameters: [],
+      },
+      {
+        signature: 'maxSseConnections: number',
+        description: 'Maximum open Server SSE responses across all users.',
+        parameters: [],
+      },
+      {
+        signature: 'maxSseConnectionsPerUser: number',
+        description: 'Maximum open Server SSE responses for one user.',
+        parameters: [],
+      },
+      {
+        signature: 'sseClientBufferBytes: number',
+        description: 'Maximum encoded bytes waiting behind one slow SSE response.',
+        parameters: [],
       },
     ],
   },
@@ -3026,6 +3202,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ClientResponse {\n    type: \'client-response\';\n    rpcId: RpcId;\n    result: RpcResult<unknown>;\n}',
   },
   {
+    name: 'CloudExecution',
+    declaration: 'export class CloudExecution extends Service {\n    static inject;\n    readonly fs: FileSystem;\n    readonly subprocess: SubprocessRuntime;\n    readonly shell: ShellExecutor;\n    constructor(ctx: Context);\n}',
+  },
+  {
     name: 'CodeBindingErrorClass',
     declaration: 'export interface CodeBindingErrorClass {\n    name: string;\n    memberNameProperty: string;\n}',
   },
@@ -3338,6 +3518,50 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface EpochHeader {\n    config: LlmCallConfig;\n    adapterDefaults?: LlmCallConfigAdapterDefaults;\n    system?: string;\n    tools?: ToolSchema[];\n}',
   },
   {
+    name: 'ExecutorBrokerExecuteOptions',
+    declaration: 'export interface ExecutorBrokerExecuteOptions {\n    readonly signal?: AbortSignal;\n    readonly onOutput?: (output: ExecutorBrokerOutput) => void;\n}',
+  },
+  {
+    name: 'ExecutorBrokerOutput',
+    declaration: 'export type ExecutorBrokerOutput = Pick<ExecutorOutputMessage, \'sequence\' | \'stream\' | \'data\'>;',
+  },
+  {
+    name: 'ExecutorBrokerRequest',
+    declaration: 'export type ExecutorBrokerRequest = Omit<ExecutorExecutionRequest, \'type\' | \'requestId\'>;',
+  },
+  {
+    name: 'ExecutorDeviceId',
+    declaration: 'export type ExecutorDeviceId = ExecutorBranded<\'ExecutorDeviceId\'>;',
+  },
+  {
+    name: 'ExecutorEnvironmentIdentity',
+    declaration: 'export interface ExecutorEnvironmentIdentity {\n    readonly environmentId: string;\n    readonly bindingId: string;\n    readonly environmentEpoch: number;\n}',
+  },
+  {
+    name: 'ExecutorExecutionRequest',
+    declaration: 'export interface ExecutorExecutionRequest extends ExecutorEnvironmentIdentity {\n    readonly type: \'execution/request\';\n    readonly requestId: ExecutorRequestId;\n    readonly userId: string;\n    readonly deviceId: ExecutorDeviceId;\n    readonly sessionId: string;\n    readonly projectId: string;\n    readonly timeoutMs: number;\n    readonly operation: ExecutorOperation;\n}',
+  },
+  {
+    name: 'ExecutorFailure',
+    declaration: 'export interface ExecutorFailure {\n    readonly code: string;\n    readonly message: string;\n    readonly retryable: boolean;\n}',
+  },
+  {
+    name: 'ExecutorOperation',
+    declaration: 'export type ExecutorOperation = FsResolveOperation | FsStatOperation | FsLstatOperation | FsReadTextOperation | FsReadBytesOperation | FsListDirOperation | FsWriteTextOperation | FsEditTextOperation | FsMakeDirOperation | FsRemoveOperation | FsMoveOperation | SubprocessRunOperation;',
+  },
+  {
+    name: 'ExecutorOutputMessage',
+    declaration: 'export interface ExecutorOutputMessage extends ExecutorEnvironmentIdentity {\n    readonly type: \'execution/output\';\n    readonly requestId: ExecutorRequestId;\n    readonly sequence: number;\n    readonly stream: \'stdout\' | \'stderr\';\n    readonly data: string;\n}',
+  },
+  {
+    name: 'ExecutorRequestId',
+    declaration: 'export type ExecutorRequestId = ExecutorBranded<\'ExecutorRequestId\'>;',
+  },
+  {
+    name: 'ExecutorResultMessage',
+    declaration: 'export interface ExecutorResultMessage extends ExecutorEnvironmentIdentity {\n    readonly type: \'execution/result\';\n    readonly requestId: ExecutorRequestId;\n    readonly result: {\n        readonly ok: true;\n        readonly value: unknown;\n    } | {\n        readonly ok: false;\n        readonly error: ExecutorFailure;\n    };\n}',
+  },
+  {
     name: 'FileDiff',
     declaration: 'export interface FileDiff {\n    path: string;\n    oldText: string | null;\n    newText: string;\n}',
   },
@@ -3348,6 +3572,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'FileReferenceCandidate',
     declaration: 'export interface FileReferenceCandidate {\n    path: string;\n    kind: \'file\' | \'directory\';\n}',
+  },
+  {
+    name: 'FileSystem',
+    declaration: 'export abstract class FileSystem extends Service {\n    constructor(ctx: Context);\n    get sandboxMode(): SandboxMode | undefined;\n    abstract resolve(path: string, opts?: {\n        cwd?: string;\n        signal?: AbortSignal;\n    }): Promise<FsTarget>;\n    abstract processPath(target: FsTarget): string;\n    abstract fileUrl(target: FsTarget): string;\n    abstract contains(parent: FsTarget, child: FsTarget): boolean;\n    abstract stat(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsInfo | undefined>;\n    abstract lstat(path: string, opts?: {\n        cwd?: string;\n    }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsPathInfo | undefined>;\n    abstract readText(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<string>;\n    abstract streamText(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<AsyncIterable<string>>;\n    abstract readBytes(target: FsTarget, signal: AbortSignal | undefined, maxBytes: number, sandboxPolicy?: SandboxExecutionPolicy): Promise<Uint8Array>;\n    abstract listDir(target: FsTarget, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsDirEntry[]>;\n    abstract writeText(target: FsTarget, content: string, expected?: FsWriteIntent, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsWriteOutcome>;\n    abstract editText(target: FsTarget, edit: FsEditRequest, expected?: {\n    /* …truncated — full shape in source */',
   },
   {
     name: 'FinishReason',
@@ -3370,8 +3598,28 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface FsEditRequest {\n    oldString: string;\n    newString: string;\n    replaceAll: boolean;\n}',
   },
   {
+    name: 'FsEditTextOperation',
+    declaration: 'export interface FsEditTextOperation {\n    readonly kind: \'fs.editText\';\n    readonly targetKey: string;\n    readonly oldString: string;\n    readonly newString: string;\n    readonly replaceAll: boolean;\n    readonly expectedVersion?: string;\n}',
+  },
+  {
     name: 'FsInfo',
     declaration: 'export interface FsInfo {\n    version: FsVersion;\n    type: \'file\' | \'directory\' | \'other\';\n    size?: number;\n}',
+  },
+  {
+    name: 'FsListDirOperation',
+    declaration: 'export interface FsListDirOperation {\n    readonly kind: \'fs.listDir\';\n    readonly targetKey: string;\n}',
+  },
+  {
+    name: 'FsLstatOperation',
+    declaration: 'export interface FsLstatOperation {\n    readonly kind: \'fs.lstat\';\n    readonly path: string;\n    readonly cwd?: string;\n}',
+  },
+  {
+    name: 'FsMakeDirOperation',
+    declaration: 'export interface FsMakeDirOperation {\n    readonly kind: \'fs.mkdir\';\n    readonly targetKey: string;\n    readonly recursive: boolean;\n}',
+  },
+  {
+    name: 'FsMoveOperation',
+    declaration: 'export interface FsMoveOperation {\n    readonly kind: \'fs.move\';\n    readonly sourceKey: string;\n    readonly destinationKey: string;\n    readonly overwrite: boolean;\n}',
   },
   {
     name: 'FsObservation',
@@ -3380,6 +3628,26 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'FsPathInfo',
     declaration: 'export interface FsPathInfo {\n    version: FsVersion;\n    type: \'file\' | \'directory\' | \'symlink\' | \'other\';\n    size?: number;\n}',
+  },
+  {
+    name: 'FsReadBytesOperation',
+    declaration: 'export interface FsReadBytesOperation {\n    readonly kind: \'fs.readBytes\';\n    readonly targetKey: string;\n    readonly maxBytes: number;\n}',
+  },
+  {
+    name: 'FsReadTextOperation',
+    declaration: 'export interface FsReadTextOperation {\n    readonly kind: \'fs.readText\';\n    readonly targetKey: string;\n}',
+  },
+  {
+    name: 'FsRemoveOperation',
+    declaration: 'export interface FsRemoveOperation {\n    readonly kind: \'fs.remove\';\n    readonly targetKey: string;\n    readonly recursive: boolean;\n}',
+  },
+  {
+    name: 'FsResolveOperation',
+    declaration: 'export interface FsResolveOperation {\n    readonly kind: \'fs.resolve\';\n    readonly path: string;\n    readonly cwd?: string;\n}',
+  },
+  {
+    name: 'FsStatOperation',
+    declaration: 'export interface FsStatOperation {\n    readonly kind: \'fs.stat\';\n    readonly targetKey: string;\n}',
   },
   {
     name: 'FsTarget',
@@ -3400,6 +3668,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'FsWriteOutcome',
     declaration: 'export interface FsWriteOutcome {\n    operation: \'create\' | \'update\';\n    version: FsVersion;\n    before: string | null;\n    after: string;\n}',
+  },
+  {
+    name: 'FsWriteTextOperation',
+    declaration: 'export interface FsWriteTextOperation {\n    readonly kind: \'fs.writeText\';\n    readonly targetKey: string;\n    readonly content: string;\n    readonly expected?: {\n        readonly kind: \'createIfAbsent\';\n    } | {\n        readonly kind: \'replaceIfVersion\';\n        readonly version: string;\n    };\n}',
   },
   {
     name: 'GenerateOptions',
@@ -3650,6 +3922,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export class LlmRuntime extends Service {\n    constructor(ctx: Context);\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<LlmCallConfig>;\n    async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
   },
   {
+    name: 'LocalExecutorRegistration',
+    declaration: 'export interface LocalExecutorRegistration {\n    readonly userId: string;\n    readonly deviceId: ServerDeviceId;\n    readonly deviceName: string;\n    readonly platform: string;\n    readonly arch: string;\n    readonly shell: string;\n    readonly capabilities: readonly string[];\n    readonly workspaces: readonly LocalWorkspaceRegistration[];\n}',
+  },
+  {
+    name: 'LocalWorkspaceRegistration',
+    declaration: 'export interface LocalWorkspaceRegistration {\n    readonly projectId: string;\n    readonly rootPath: string;\n}',
+  },
+  {
     name: 'LspHover',
     declaration: 'export interface LspHover {\n    readonly contents: string;\n    readonly range?: LspRange;\n}',
   },
@@ -3850,6 +4130,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type PreToolDecision = {\n    kind: \'allow\';\n} | {\n    kind: \'deny\';\n    reason: string;\n} | {\n    kind: \'ask\';\n    reason?: string;\n};',
   },
   {
+    name: 'ProjectEnvironmentsView',
+    declaration: 'export interface ProjectEnvironmentsView {\n    readonly sessionId: string;\n    readonly activeBindingId: ServerBindingId;\n    readonly environmentEpoch: number;\n    readonly environments: readonly ServerEnvironmentView[];\n}',
+  },
+  {
+    name: 'ProjectIdentity',
+    declaration: 'export interface ProjectIdentity {\n    readonly userId: ServerUserId;\n    readonly projectId: ServerProjectId;\n}',
+  },
+  {
     name: 'ProjectionChangeListener',
     declaration: 'export type ProjectionChangeListener = (session: Session, key: Extract<keyof SessionProjectionMap, string>, value: unknown, seq: number) => void;',
   },
@@ -3868,6 +4156,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ProjectionSnapshot',
     declaration: 'export interface ProjectionSnapshot {\n    asOfSeq: number;\n    values: Partial<SessionProjectionMap>;\n}',
+  },
+  {
+    name: 'ProjectSessionState',
+    declaration: 'export interface ProjectSessionState extends ProjectIdentity {\n    readonly cwd: string;\n    readonly sessionId: ReturnType<typeof SessionId>;\n    readonly storageSegments: readonly string[];\n}',
   },
   {
     name: 'PromptAssembly',
@@ -4070,8 +4362,24 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SendTeamMessageResult {\n    readonly messageId: TeamMessageId;\n    readonly status: \'accepted\' | \'queued\';\n}',
   },
   {
+    name: 'ServerBindingId',
+    declaration: 'export type ServerBindingId = Branded<\'ServerBindingId\'>;',
+  },
+  {
+    name: 'ServerDeviceId',
+    declaration: 'export type ServerDeviceId = Branded<\'ServerDeviceId\'>;',
+  },
+  {
+    name: 'ServerEnvironmentView',
+    declaration: 'export interface ServerEnvironmentView {\n    readonly bindingId: ServerBindingId;\n    readonly environmentId: string;\n    readonly type: \'cloud\' | \'local\';\n    readonly status: \'online\' | \'offline\';\n    readonly rootPath?: string;\n    readonly deviceId?: ServerDeviceId;\n    readonly deviceName?: string;\n    readonly platform: string;\n    readonly arch: string;\n    readonly shell: string;\n    readonly capabilities: readonly string[];\n}',
+  },
+  {
     name: 'ServerResponse',
     declaration: 'export interface ServerResponse {\n    type: \'server-response\';\n    rpcId: RpcId;\n    result: RpcResult<unknown>;\n}',
+  },
+  {
+    name: 'ServerRuntimeSelection',
+    declaration: 'export interface ServerRuntimeSelection {\n    readonly state: ProjectSessionState;\n    readonly view: ProjectEnvironmentsView;\n    readonly environment: ServerEnvironmentView;\n}',
   },
   {
     name: 'SessionAvailability',
@@ -4350,6 +4658,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ShellExecSpec {\n    command: string;\n    workdir: string;\n    timeoutMs: number;\n    stdoutMaxBytes: number;\n    signal?: AbortSignal | undefined;\n    stdin?: string | undefined;\n    env?: Record<string, string> | undefined;\n    dshEnv?: DshEnvironment | undefined;\n    sandboxPolicy: SandboxExecutionPolicy | undefined;\n}',
   },
   {
+    name: 'ShellExecutor',
+    declaration: 'export abstract class ShellExecutor extends Service {\n    constructor(ctx: Context);\n    get sandboxMode(): SandboxMode | undefined;\n    abstract resolve(request: ShellExecRequest): ShellExecSpec;\n    abstract run(spec: ShellExecSpec): Promise<ShellRunResult>;\n    abstract start(spec: ShellExecSpec): ShellProcess;\n}',
+  },
+  {
     name: 'ShellProcess',
     declaration: 'export interface ShellProcess {\n    status: ShellProcessStatus;\n    exitCode: number | null;\n    signal: NodeJS.Signals | null;\n    readonly done: Promise<void>;\n    sandbox?: ShellSandboxInfo;\n    readOutput(): ShellProcessRead;\n    kill(): boolean;\n}',
   },
@@ -4556,6 +4868,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SubprocessOutputReader',
     declaration: 'export interface SubprocessOutputReader {\n    readFrom(fromByte: number): SubprocessOutputRead;\n}',
+  },
+  {
+    name: 'SubprocessRunOperation',
+    declaration: 'export interface SubprocessRunOperation {\n    readonly kind: \'subprocess.run\';\n    readonly argv: readonly string[];\n    readonly cwd: string;\n    readonly env?: Readonly<Record<string, string | null>>;\n    readonly stdin?: string;\n    readonly graceMs: number;\n    readonly outputLimitBytes: number;\n}',
+  },
+  {
+    name: 'SubprocessRuntime',
+    declaration: 'export abstract class SubprocessRuntime extends Service {\n    constructor(ctx: Context);\n    abstract resolveExecutable(command: string, env?: Readonly<Record<string, string>>, signal?: AbortSignal): Promise<string>;\n    abstract spawn(spec: SubprocessSpawnSpec): SubprocessHandle;\n    abstract spawnTerminal(spec: SubprocessTerminalSpawnSpec): Promise<SubprocessTerminalHandle>;\n}',
   },
   {
     name: 'SubprocessSpawnSpec',
