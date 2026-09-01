@@ -145,6 +145,8 @@ export interface Config {
   maxSseConnectionsPerUser: number
   /** Maximum encoded bytes waiting behind one slow SSE response. */
   sseClientBufferBytes: number
+  /** Browser origin allowed to call the Server directly, or undefined to disable CORS. */
+  corsOrigin?: string
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -152,6 +154,7 @@ export function apply(ctx: Context, config: Config): void {
   const root = resolve(config.dataDir ?? startup.dataDir ?? dshHomePath('server-data'))
   const active = new Map<string, Promise<void>>()
   const limit = config.maxConcurrentTurns ?? startup.maxConcurrentTurns
+  const corsOrigin = config.corsOrigin ?? startup.corsOrigin
   const { maxSseConnections, maxSseConnectionsPerUser, sseClientBufferBytes } = config
   for (const [field, value] of Object.entries({ maxSseConnections, maxSseConnectionsPerUser, sseClientBufferBytes })) {
     if (!Number.isSafeInteger(value) || value < 1) throw new Error(`server: ${field} must be a positive safe integer`)
@@ -195,6 +198,17 @@ export function apply(ctx: Context, config: Config): void {
     return makeRelease()
   }
   const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    if (corsOrigin !== undefined) {
+      res.setHeader('access-control-allow-origin', corsOrigin)
+      res.setHeader('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS')
+      res.setHeader('access-control-allow-headers', 'content-type')
+      if (corsOrigin !== '*') res.setHeader('vary', 'origin')
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204)
+        res.end()
+        return
+      }
+    }
     const pathname = new URL(req.url ?? '/', 'http://dsh').pathname
     if (pathname === '/healthz' && req.method === 'GET') {
       json(res, 200, { ok: true })

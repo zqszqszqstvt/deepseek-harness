@@ -1350,6 +1350,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Maximum encoded bytes waiting behind one slow SSE response.',
         parameters: [],
       },
+      {
+        signature: 'corsOrigin?: string',
+        description: 'Browser origin allowed to call the Server directly, or undefined to disable CORS.',
+        parameters: [],
+      },
     ],
   },
   {

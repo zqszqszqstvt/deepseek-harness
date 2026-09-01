@@ -14,6 +14,8 @@ Status: implemented
 
 云端文件系统、子进程和 shell provider 运行在同一个隔离 Cordis group 中。bridge 捕获这些 provider，根服务则根据发起调用的 Agent Session 路由现有 capability consumer。本地请求通过 Executor Broker 携带用户、项目、Session、设备、binding 和 epoch 标识。流式输出和最终结果会重复 binding 与 epoch，Broker 会拒绝标识不匹配的响应帧。执行租约会阻止环境切换，直至每个前台操作或云端后台进程完全停止。在旧 epoch 下创建的 target 和 shell spec 会失败，不会在新环境中重新解释。
 
+Server 将 `userId` 作为路由键，不对客户端进行身份验证。直接使用 Electron 测试时，通过显式 CORS origin 启用浏览器传输；仅由后端调用的部署保持 CORS 关闭，并由后端根据已验证主体派生 `userId`。
+
 Server 只向模型提供一个 `shell` 工具，其方言由活动环境快照决定。该组合包禁用依据 Server 主机平台选择的 `bash` 和 `pwsh` consumer，同时在 Router 后保留其云端 provider 行为，避免本地平台不同时暴露误导性的工具名称。
 
 远端错误、断线、过期 epoch、不支持的流式 stdin 和 PTY 分配都会在所选环境中直接失败。这些失败均不得调用云端 provider 作为回退。
@@ -30,7 +32,7 @@ Server 只向模型提供一个 `shell` 工具，其方言由活动环境快照�
 
 ## 验证
 
-Server 测试覆盖项目 binding 冲突、切换排他租约、Agent 切换审批、完整环境快照、完整本地 Broker 标识、响应 epoch 不匹配、远端错误不回退、Windows 本地工作目录解析、本地后台拒绝和隔离 provider 组合拓扑。Server package TypeScript 构建覆盖所有 Router 和工具入口。
+Server 测试覆盖项目 binding 冲突、切换排他租约、Agent 切换审批、完整环境快照、完整本地 Broker 标识、响应 epoch 不匹配、远端错误不回退、Windows 本地工作目录解析、本地后台拒绝、显式 CORS 预检和隔离 provider 组合拓扑。Server package TypeScript 构建覆盖所有 Router 和工具入口。
 
 ## 后果
 

@@ -44,6 +44,8 @@ export interface ServerStartupValues {
   maxSseConnectionsPerUser: number
   /** Maximum encoded bytes waiting behind one slow SSE response. */
   sseClientBufferBytes: number
+  /** Browser origin allowed to call the Server directly, or undefined to disable CORS. */
+  corsOrigin?: string
 }
 
 interface ServerOptions {
@@ -54,6 +56,7 @@ interface ServerOptions {
   maxSseConnections?: string
   maxSseConnectionsPerUser?: string
   sseBufferBytes?: string
+  corsOrigin?: string
 }
 
 function serverCommand(): Command {
@@ -68,6 +71,7 @@ function serverCommand(): Command {
     .option('--max-sse-connections <n>', 'maximum open SSE responses across users (default: 128)')
     .option('--max-sse-connections-per-user <n>', 'maximum open SSE responses per user (default: 2)')
     .option('--sse-buffer-bytes <n>', 'maximum queued bytes per slow SSE response (default: 1048576)')
+    .option('--cors-origin <origin>', 'allow one browser origin, or * for direct Electron testing')
     .addHelpText('after', `
 Deployment contract:
   dsh server runs only on Linux. macOS and Windows cannot enforce workspace-only
@@ -77,8 +81,8 @@ Deployment contract:
   the authenticated principal; never accept a caller-controlled userId.
 
 Examples:
-  dsh server --port 13080
-  dsh server --host 0.0.0.0 --port 13080 --data-dir /srv/dsh-data  # trusted backend network only
+  dsh server --port 3080
+  dsh server --host 0.0.0.0 --port 3080 --data-dir /srv/dsh-data --cors-origin '*'  # trusted test network only
 `)
 }
 
@@ -101,6 +105,18 @@ export function apply(ctx: Context): void {
     if (!Number.isSafeInteger(maxSseConnectionsPerUser) || maxSseConnectionsPerUser < 1) program.error('error: --max-sse-connections-per-user must be at least 1')
     if (maxSseConnectionsPerUser > maxSseConnections) program.error('error: --max-sse-connections-per-user cannot exceed --max-sse-connections')
     if (!Number.isSafeInteger(sseClientBufferBytes) || sseClientBufferBytes < 1) program.error('error: --sse-buffer-bytes must be at least 1')
+    const corsOrigin = options.corsOrigin
+    if (corsOrigin !== undefined && (corsOrigin.length === 0 || corsOrigin.length > 2048 || /[\r\n]/.test(corsOrigin))) {
+      program.error('error: --cors-origin must be a non-empty HTTP origin, null, or *')
+    }
+    if (corsOrigin !== undefined && corsOrigin !== '*' && corsOrigin !== 'null') {
+      try {
+        const parsed = new URL(corsOrigin)
+        if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.origin !== corsOrigin) throw new Error()
+      } catch {
+        program.error('error: --cors-origin must be a non-empty HTTP origin, null, or *')
+      }
+    }
     const dataDir = options.dataDir === undefined ? undefined : resolve(options.dataDir)
     ctx.provide(SERVER_STARTUP_SERVICE, {
       host,
@@ -111,6 +127,7 @@ export function apply(ctx: Context): void {
       maxSseConnections,
       maxSseConnectionsPerUser,
       sseClientBufferBytes,
+      ...corsOrigin === undefined ? {} : { corsOrigin },
     })
   })
   parseCmdline(ctx, program)

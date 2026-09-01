@@ -105,6 +105,7 @@
         maxSseConnections: !!js ctx.serverStartup.maxSseConnections
         maxSseConnectionsPerUser: !!js ctx.serverStartup.maxSseConnectionsPerUser
         sseClientBufferBytes: !!js ctx.serverStartup.sseClientBufferBytes
+        corsOrigin: !!js ctx.serverStartup.corsOrigin
 
 - id: session-persistence-jsonl
   disabled: true

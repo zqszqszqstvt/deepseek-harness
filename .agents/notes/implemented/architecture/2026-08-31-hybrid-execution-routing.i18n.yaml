@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-31-hybrid-execution-routing.md
-2026-08-31-hybrid-execution-routing.md: f9cd588223f96884fd0c9371ca0f00241e48a3af
-2026-08-31-hybrid-execution-routing.zh.md: 53c3a7bc6a3e1b47b9da72dbf737298acad56ab0
+2026-08-31-hybrid-execution-routing.md: 86a0f74e1f911f80a2b2c57650da457df7fae160
+2026-08-31-hybrid-execution-routing.zh.md: af9a8de3de6e7670df5d4373d4f4c12c1b339760

@@ -10,6 +10,8 @@ dsh 的 Linux-only 多用户 HTTP 组合包。它为 URL 中的每个 `(userId, 
 
 `dsh server` 不提供身份验证层。它只能监听回环地址或可信后端网络。完成身份验证的平台后端必须从已验证主体派生每个 URL `userId`，绝不能把调用者可控的请求参数直接写入该路径。直接暴露在公网，包括不受限制地使用 `--host 0.0.0.0`，都违反此契约。
 
+浏览器 CORS 默认关闭。直接使用 Electron 测试客户端时，可以在可信测试网络中传入 `--cors-origin '*'`，也可以指定一个确切的 HTTP origin；仅由生产后端调用的部署不设置该选项。该开关只允许浏览器传输，不提供身份验证。
+
 默认项目继续映射到 `users/<sha256(userId)>/workspace`；每个具名项目映射到 `users/<sha256(userId)>/projects/<sha256(projectId)>/workspace`。Server 将每个 Agent 沙箱固定在对应项目工作区；交互式授权不能授予工作区外的访问权。文件系统读取与 `glob`/`grep` 搜索会拒绝工作区外目标，包括规范化后的符号链接逃逸。主机异常和 ApiProxy 失败的详情仅记入日志，HTTP 和终止 SSE 客户端只会收到稳定的通用错误，不会暴露主机路径。回合准入会串行化同一项目 Session，同时允许同一用户的其他项目独立使用全局并发池。
 
 更改 `--data-dir` 时，若冷 Server Session 记录的工作目录严格符合 Server 自有的默认或具名项目布局，则保留该 Session。JSONL 后端会先重写持久化的工作目录并迁移制品，然后再由 ApiProxy 接管。活跃 Session、不相关的同 ID 制品和已占用的目标目录都会失败关闭。

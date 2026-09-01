@@ -35,7 +35,9 @@ describe('server startup help', () => {
       expect(help).toContain('dsh server does not authenticate clients')
       expect(help).toContain('derive each URL userId from')
       expect(help).toContain('the authenticated principal')
-      expect(help).toContain('trusted backend network only')
+      expect(help).toContain('--cors-origin <origin>')
+      expect(help).toContain('dsh server --port 3080')
+      expect(help).toContain('trusted test network only')
       expect(ctx.get('serverStartup')).toBeUndefined()
     } finally {
       internals.stdout = original
@@ -79,5 +81,18 @@ describe('server startup help', () => {
       maxSseConnections: 128,
       maxSseConnectionsPerUser: 2,
     })
+  })
+
+  it('publishes an explicit direct-client CORS origin', async () => {
+    const ctx = new Context()
+    contexts.push(ctx)
+    const exit = vi.fn()
+    ServerStartup.internals.platform = 'linux'
+    provideCmdline(ctx, { args: ['--cors-origin', '*'], exit })
+
+    await ctx.plugin(ServerStartup)
+
+    expect(exit).not.toHaveBeenCalled()
+    expect(ctx.get('serverStartup')).toMatchObject({ corsOrigin: '*' })
   })
 })

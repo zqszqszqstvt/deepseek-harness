@@ -1738,6 +1738,8 @@ export interface Config {
   maxSseConnectionsPerUser: number
   /** Maximum encoded bytes waiting behind one slow SSE response. */
   sseClientBufferBytes: number
+  /** Browser origin allowed to call the Server directly, or undefined to disable CORS. */
+  corsOrigin?: string
 }
 ```
 

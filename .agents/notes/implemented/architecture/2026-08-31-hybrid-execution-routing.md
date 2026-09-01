@@ -14,6 +14,8 @@ Each project Session mounts cloud and local workspace bindings but selects exact
 
 Cloud filesystem, subprocess, and shell providers run in one isolated Cordis group. A bridge captures those providers, while root services route existing capability consumers by the initiating Agent Session. Local requests carry user, project, Session, device, binding, and epoch identity through the Executor Broker. Streamed output and final results repeat the binding and epoch, and the Broker rejects mismatched response frames. A lease blocks environment changes until each foreground operation or cloud background process reaches quiescence. Targets and shell specs created under an older epoch fail instead of being reinterpreted.
 
+The Server treats `userId` as a routing key and does not authenticate clients. Direct Electron testing enables browser transport through an explicit CORS origin; backend-only deployments leave CORS disabled and derive `userId` from their authenticated principal.
+
 The Server exposes one model-facing `shell` tool whose dialect follows the active environment snapshot. The bundle disables its host-platform `bash` and `pwsh` consumers, preserving their cloud provider behavior behind the router without exposing a misleading tool name when a local platform differs.
 
 Remote errors, disconnects, stale epochs, unsupported streaming stdin, and unsupported PTY allocation fail in the selected environment. None of these failures can invoke a cloud provider as a fallback.
@@ -30,7 +32,7 @@ Remote errors, disconnects, stale epochs, unsupported streaming stdin, and unsup
 
 ## Verification
 
-Server tests cover project binding conflicts, switch exclusion leases, approval-gated Agent switching, complete environment snapshots, full local Broker identity, mismatched response epochs, no-fallback remote errors, Windows local workdir resolution, local background rejection, and the composed isolated-provider topology. The Server package TypeScript build covers all router and tool entries.
+Server tests cover project binding conflicts, switch exclusion leases, approval-gated Agent switching, complete environment snapshots, full local Broker identity, mismatched response epochs, no-fallback remote errors, Windows local workdir resolution, local background rejection, explicit CORS preflight, and the composed isolated-provider topology. The Server package TypeScript build covers all router and tool entries.
 
 ## Consequences
 
