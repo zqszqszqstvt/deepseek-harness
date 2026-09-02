@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as Server from '../src/index.ts'
 import type { ServerStartupValues } from '../src/startup.ts'
 import { provideCloudEnvironment } from './environment-testkit.ts'
-import { getJson } from './http-testkit.ts'
+import { getJson, putJson } from './http-testkit.ts'
 
 interface CreateCall {
   readonly cwd: string
@@ -103,7 +103,7 @@ describe('server project routes', () => {
       status: 204,
       headers: {
         'access-control-allow-origin': '*',
-        'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
+        'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
         'access-control-allow-headers': 'content-type',
       },
     })
@@ -112,6 +112,48 @@ describe('server project routes', () => {
     const denied = await preflight(defaultHarness.port, '/v1/users/alice/projects/alpha/history')
     expect(denied.status).toBe(404)
     expect(denied.headers['access-control-allow-origin']).toBeUndefined()
+  })
+
+  it('reports integration capabilities without creating a Session', async () => {
+    const harness = await start()
+
+    await expect(getJson(harness.port, '/v1/capabilities')).resolves.toEqual({
+      status: 200,
+      body: {
+        ok: true,
+        value: {
+          apiVersion: 1,
+          executorProtocolVersion: 1,
+          sessionIdentity: 'user-project',
+          features: [
+            'session.initialize',
+            'session.history',
+            'session.turns',
+            'session.events',
+            'session.interactions',
+            'execution.environments',
+            'executor.websocket',
+          ],
+        },
+      },
+    })
+    expect(harness.creates).toEqual([])
+  })
+
+  it('initializes one project Session idempotently', async () => {
+    const harness = await start()
+    const path = '/v1/users/alice/projects/alpha/session'
+
+    const first = await putJson(harness.port, path)
+    const second = await putJson(harness.port, path)
+
+    expect(first).toMatchObject({ status: 200, body: { ok: true, value: {
+      sessionId: projectSessionId('alice', 'alpha'),
+      activeBindingId: 'cloud',
+      environmentEpoch: 0,
+    } } })
+    expect(second).toEqual(first)
+    expect(harness.creates).toHaveLength(2)
   })
 
   it('gives each user project a stable isolated Session and workspace', async () => {

@@ -24,12 +24,14 @@ import { ServerSseMux } from './sse-mux.ts'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-apiproxy'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import { EXECUTOR_PROTOCOL_VERSION } from '@deepseek-ai/dsh-executor-protocol'
 
 export const name = 'server'
 export const inject = ['webServer', 'apiProxy', 'agents', 'sessions', 'serverStartup', 'serverEnvironments']
 
 const MAX_BODY_BYTES = 1024 * 1024
 const PUBLIC_SERVER_ERROR = 'server request failed'
+const SERVER_API_VERSION = 1
 
 interface TurnBody { message?: unknown; mode?: unknown }
 interface ApprovalBody { rpcId?: unknown; outcome?: unknown }
@@ -200,7 +202,7 @@ export function apply(ctx: Context, config: Config): void {
   const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (corsOrigin !== undefined) {
       res.setHeader('access-control-allow-origin', corsOrigin)
-      res.setHeader('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS')
+      res.setHeader('access-control-allow-methods', 'GET, POST, PUT, DELETE, OPTIONS')
       res.setHeader('access-control-allow-headers', 'content-type')
       if (corsOrigin !== '*') res.setHeader('vary', 'origin')
       if (req.method === 'OPTIONS') {
@@ -225,6 +227,26 @@ export function apply(ctx: Context, config: Config): void {
       })
       return
     }
+    if (pathname === '/v1/capabilities' && req.method === 'GET') {
+      json(res, 200, {
+        ok: true,
+        value: {
+          apiVersion: SERVER_API_VERSION,
+          executorProtocolVersion: EXECUTOR_PROTOCOL_VERSION,
+          sessionIdentity: 'user-project',
+          features: [
+            'session.initialize',
+            'session.history',
+            'session.turns',
+            'session.events',
+            'session.interactions',
+            'execution.environments',
+            'executor.websocket',
+          ],
+        },
+      })
+      return
+    }
     const projectRoute = parseProjectRoute(pathname)
     if (projectRoute === undefined) {
       json(res, 404, { ok: false, error: 'user route not found' })
@@ -234,6 +256,10 @@ export function apply(ctx: Context, config: Config): void {
     const resource = projectRoute.resource
     try {
       await initializeProject(state)
+      if (resource.length === 1 && resource[0] === 'session' && req.method === 'PUT') {
+        json(res, 200, { ok: true, value: ctx.serverEnvironments.project(state) })
+        return
+      }
       if (resource.length === 1 && resource[0] === 'environments' && req.method === 'GET') {
         json(res, 200, { ok: true, value: ctx.serverEnvironments.project(state) })
         return

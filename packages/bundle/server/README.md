@@ -2,13 +2,15 @@
 
 English | [中文](README.zh.md)
 
-The Linux-only multi-user HTTP bundle for dsh. It creates one deterministic Session and workspace per URL `(userId, projectId)`, stores Server-owned state below `--data-dir`, and exposes health, readiness, turn, history, approval, question, cancellation, and multiplexed SSE event routes under `/v1/users/<userId>/projects/<projectId>/...`. The legacy `/v1/users/<userId>/...` routes address the reserved `default` project. The default command port is `3080`.
+The Linux-only multi-user HTTP bundle for dsh. It creates one deterministic Session and workspace per URL `(userId, projectId)`, stores Server-owned state below `--data-dir`, and exposes idempotent Session initialization, turn, history, approval, question, cancellation, execution-environment, and multiplexed SSE event routes under `/v1/users/<userId>/projects/<projectId>/...`. `GET /v1/capabilities` reports the HTTP and executor protocol versions without creating a Session. The legacy `/v1/users/<userId>/...` routes address the reserved `default` project. The default command port is `3080`.
 
 ## Deployment Contract
 
 `dsh server` runs only on Linux, where strict bubblewrap confinement provides workspace-only reads. macOS and Windows are rejected before startup values are published, so the HTTP listener and Server Session persistence cannot activate. This restriction belongs to the Server profile; other dsh profiles retain their existing platform support. If bubblewrap is unavailable or unusable, shell execution fails closed with `SANDBOX_UNAVAILABLE`.
 
 `dsh server` has no authentication layer. Keep it on loopback or a trusted backend network. The authenticating platform backend must derive every URL `userId` from its authenticated principal and must never copy a caller-controlled request parameter into that path. A direct public bind, including an unrestricted `--host 0.0.0.0`, violates this contract.
+
+The platform backend owns user-visible Session discovery, titles, tenant ownership, and archival state. It uses `PUT /v1/users/<userId>/projects/<projectId>/session` to initialize or resume one registered Session. Server persistence intentionally does not expose a user Session-list route because its headers do not contain platform ownership or presentation metadata.
 
 Browser CORS is disabled by default. A direct Electron test client can use `--cors-origin '*'` on a trusted test network, or name one exact HTTP origin; production backend-only deployments leave this option unset. This switch permits browser transport only and does not add authentication.
 

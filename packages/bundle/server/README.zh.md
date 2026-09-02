@@ -2,13 +2,15 @@
 
 [English](README.md) | 中文
 
-dsh 的 Linux-only 多用户 HTTP 组合包。它为 URL 中的每个 `(userId, projectId)` 创建确定性 Session 和工作区，将 Server 自有状态存放在 `--data-dir` 下，并在 `/v1/users/<userId>/projects/<projectId>/...` 下提供健康检查、就绪检查、回合、历史、审批、问题回答、取消和复用 SSE 事件路由。旧版 `/v1/users/<userId>/...` 路由访问保留的 `default` 项目。命令的默认端口是 `3080`。
+dsh 的 Linux-only 多用户 HTTP 组合包。它为 URL 中的每个 `(userId, projectId)` 创建确定性 Session 和工作区，将 Server 自有状态存放在 `--data-dir` 下，并在 `/v1/users/<userId>/projects/<projectId>/...` 下提供幂等 Session 初始化、回合、历史、审批、问题回答、取消、执行环境和复用 SSE 事件路由。`GET /v1/capabilities` 在不创建 Session 的情况下报告 HTTP 与执行器协议版本。旧版 `/v1/users/<userId>/...` 路由访问保留的 `default` 项目。命令的默认端口是 `3080`。
 
 ## 部署契约
 
 `dsh server` 只能在 Linux 上运行，因为严格 bubblewrap 限制只在该平台上提供仅工作区可读保证。macOS 和 Windows 会在启动值发布前被拒绝，因此 HTTP 监听器和 Server Session 持久化都无法激活。该限制只属于 Server profile；其他 dsh profile 保留现有平台支持。如果 bubblewrap 不可用或无法正常工作，shell 执行会以 `SANDBOX_UNAVAILABLE` fail closed。
 
 `dsh server` 不提供身份验证层。它只能监听回环地址或可信后端网络。完成身份验证的平台后端必须从已验证主体派生每个 URL `userId`，绝不能把调用者可控的请求参数直接写入该路径。直接暴露在公网，包括不受限制地使用 `--host 0.0.0.0`，都违反此契约。
+
+平台后端负责用户可见的 Session 发现、标题、租户归属和归档状态，并通过 `PUT /v1/users/<userId>/projects/<projectId>/session` 初始化或恢复已登记的 Session。Server 持久层的 header 不含平台归属或展示元数据，因此有意不提供用户 Session 列表路由。
 
 浏览器 CORS 默认关闭。直接使用 Electron 测试客户端时，可以在可信测试网络中传入 `--cors-origin '*'`，也可以指定一个确切的 HTTP origin；仅由生产后端调用的部署不设置该选项。该开关只允许浏览器传输，不提供身份验证。
 

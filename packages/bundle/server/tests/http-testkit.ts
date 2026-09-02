@@ -3,7 +3,7 @@ import type { ClientRequest, IncomingMessage } from 'node:http'
 
 interface JsonResponse { status: number; body: unknown }
 
-function requestJson(port: number, path: string, method: 'GET' | 'POST', body?: unknown): Promise<JsonResponse> {
+function requestJson(port: number, path: string, method: 'GET' | 'POST' | 'PUT', body?: unknown): Promise<JsonResponse> {
   const payload = body === undefined ? undefined : JSON.stringify(body)
   const headers = payload === undefined
     ? undefined
@@ -33,6 +33,11 @@ export function getJson(port: number, path: string): Promise<JsonResponse> {
 /** Send JSON to one test server endpoint over Node's unrestricted HTTP client. */
 export function postJson(port: number, path: string, body: unknown): Promise<JsonResponse> {
   return requestJson(port, path, 'POST', body)
+}
+
+/** Send an idempotent JSON request to one test server endpoint. */
+export function putJson(port: number, path: string, body?: unknown): Promise<JsonResponse> {
+  return requestJson(port, path, 'PUT', body)
 }
 
 /** One persistent SSE response controlled by a test. */
