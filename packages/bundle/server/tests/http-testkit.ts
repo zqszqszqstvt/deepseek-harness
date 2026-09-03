@@ -3,7 +3,7 @@ import type { ClientRequest, IncomingMessage } from 'node:http'
 
 interface JsonResponse { status: number; body: unknown }
 
-function requestJson(port: number, path: string, method: 'GET' | 'POST' | 'PUT', body?: unknown): Promise<JsonResponse> {
+function requestJson(port: number, path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', body?: unknown): Promise<JsonResponse> {
   const payload = body === undefined ? undefined : JSON.stringify(body)
   const headers = payload === undefined
     ? undefined
@@ -38,6 +38,11 @@ export function postJson(port: number, path: string, body: unknown): Promise<Jso
 /** Send an idempotent JSON request to one test server endpoint. */
 export function putJson(port: number, path: string, body?: unknown): Promise<JsonResponse> {
   return requestJson(port, path, 'PUT', body)
+}
+
+/** Permanently delete one Server resource. */
+export function deleteJson(port: number, path: string): Promise<JsonResponse> {
+  return requestJson(port, path, 'DELETE')
 }
 
 /** One persistent SSE response controlled by a test. */

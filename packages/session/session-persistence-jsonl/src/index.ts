@@ -9,7 +9,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { readdirSync } from 'node:fs'
-import { open, mkdir, readFile, readdir, realpath, link, rename, rm, stat, truncate } from 'node:fs/promises'
+import { open, mkdir, readFile, readdir, realpath, link, lstat, rename, rm, stat, truncate, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -331,6 +331,24 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
 
     if (sourceDir !== targetDir) await this.moveSessionDirectory(sourceDir, targetDir)
     return 'relocated'
+  }
+
+  /**
+   * Permanently remove one cold session's complete backend-owned directory.
+   * Retirement and all same-id persistence work settle before removal starts.
+   * @param id - persisted session to remove.
+   * @returns true when an artifact existed, false when already absent.
+   */
+  deleteStoredSession(id: SessionId): Promise<boolean> {
+    return this.coordinator.deleteStored(id, async () => {
+      const path = await this.findLog(id)
+      if (path === undefined) return false
+      const directory = dirname(path)
+      const identity = await lstat(directory)
+      if (identity.isSymbolicLink()) await unlink(directory)
+      else await rm(directory, { recursive: true })
+      return true
+    })
   }
 
   /**

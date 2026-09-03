@@ -693,6 +693,28 @@ export class PersistenceCoordinator<TornMarker = unknown> {
     this.states.delete(id)
   }
 
+  /**
+   * Run one backend-owned deletion after the exact Session identity is cold
+   * and its final retirement drain has completed. The operation shares the
+   * per-id chain with reads, repairs, and appends, so no persistence work can
+   * race the physical removal.
+   * @param id - persisted session whose backend data will be removed.
+   * @param remove - backend deletion performed while the id is exclusively owned.
+   * @returns the backend deletion result.
+   */
+  async deleteStored<T>(id: SessionId, remove: () => Promise<T>): Promise<T> {
+    await this.waitForRetirement(id)
+    return this.serialize(id, async () => {
+      if (this.ctx.sessions.get(id) !== undefined || this.states.get(id)?.owner !== undefined) {
+        throw new Error(`cannot delete live session "${id}"`)
+      }
+      this.preparations.invalidate(id)
+      const result = await remove()
+      this.states.delete(id)
+      return result
+    })
+  }
+
   private async appendCore(id: SessionId, events: readonly SessionEvent[]): Promise<void> {
     // Every append route converges here: the public service, live write-behind
     // drains, and HMR seed/suffix adoption. Legacy-shape rejection stays at

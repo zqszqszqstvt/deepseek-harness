@@ -108,6 +108,17 @@ export function projectSessionState(root: string, identity: ProjectIdentity): Pr
 }
 
 /**
+ * Resolve the narrow filesystem entry owned by one project route. The legacy
+ * default project owns only its workspace; a named project owns its hashed
+ * project directory.
+ * @param state - deterministic project storage state.
+ * @returns absolute directory that permanent project deletion may remove.
+ */
+export function projectDataDirectory(state: ProjectSessionState): string {
+  return state.projectId === DEFAULT_PROJECT_ID ? state.cwd : dirname(state.cwd)
+}
+
+/**
  * Check whether a persisted cwd has the hashed layout owned by one project.
  * The data-root prefix may differ because copied Server data can be relocated.
  * @param cwd - persisted Session cwd.

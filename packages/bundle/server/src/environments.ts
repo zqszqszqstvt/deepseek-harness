@@ -326,6 +326,23 @@ export class ServerEnvironments extends Service {
     return this.project(state)
   }
 
+  /**
+   * Permanently remove one project's durable selection and live binding.
+   * Active execution leases reject deletion so a tool cannot outlive its
+   * environment identity.
+   * @param state - project Session being deleted.
+   */
+  async deleteProject(state: ProjectSessionState): Promise<void> {
+    const key = String(state.sessionId)
+    if ((this.activeExecutions.get(key) ?? 0) > 0) {
+      throw new ServerEnvironmentBusyError(
+        'server environments: active tool calls must settle before deletion',
+      )
+    }
+    await this.requireSessions().delete(key)
+    if (this.projects.get(key) === state) this.projects.delete(key)
+  }
+
   private requireSessions(): KvTable<string, ProjectEnvironmentRecord> {
     if (this.sessions === undefined) throw new Error('server environments: storage is not initialized')
     return this.sessions

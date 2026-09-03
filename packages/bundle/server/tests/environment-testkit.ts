@@ -36,5 +36,6 @@ export function provideCloudEnvironment(ctx: Context): void {
       if (bindingId !== 'cloud') throw new Error(`test environment '${bindingId}' is unavailable`)
       return project(state)
     },
+    deleteProject: async (state: ProjectSessionState) => { projects.delete(String(state.sessionId)) },
   } as unknown as ServerEnvironments)
 }

@@ -1,19 +1,20 @@
 /** Project-scoped Session identity through the real Server HTTP route. */
 
 import { createHash } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as Server from '../src/index.ts'
 import type { ServerStartupValues } from '../src/startup.ts'
 import { provideCloudEnvironment } from './environment-testkit.ts'
-import { getJson, putJson } from './http-testkit.ts'
+import { deleteJson, getJson, putJson } from './http-testkit.ts'
 
 interface CreateCall {
   readonly cwd: string
@@ -42,19 +43,13 @@ async function start(corsOrigin?: string): Promise<{ port: number; dataDir: stri
   const context = new Context()
   contexts.push(context)
   await context.plugin(SessionStore)
+  await context.plugin(JsonlSessionPersistence, { root: join(dataDir, 'sessions'), compression: 'none' })
   const creates: CreateCall[] = []
   const api = {
     sessions: {
       create: async (request: { rpcId: string; payload: CreateCall }) => {
         creates.push(request.payload)
         const sessionId = SessionId(request.payload.sessionId)
-        if (context.sessions.get(sessionId) !== undefined) {
-          return {
-            rpcId: request.rpcId,
-            result: { ok: false as const, error: { code: 'session-conflict', message: 'exists', details: {} } },
-          }
-        }
-        context.sessions.create(sessionId, { meta: { cwd: request.payload.cwd } })
         return { rpcId: request.rpcId, result: { ok: true as const, value: { sessionId } } }
       },
       history: async (request: { rpcId: string; payload: { sessionId: string } }) => ({
@@ -127,6 +122,7 @@ describe('server project routes', () => {
           sessionIdentity: 'user-project',
           features: [
             'session.initialize',
+            'session.delete',
             'session.history',
             'session.turns',
             'session.events',
@@ -189,6 +185,22 @@ describe('server project routes', () => {
         cwd: join(harness.dataDir, 'users', userKey, 'projects', digest('alpha'), 'workspace'),
       },
     ])
+  })
+
+  it('deletes a project without initializing it again and remains idempotent', async () => {
+    const harness = await start()
+    const path = '/v1/users/alice/projects/alpha/session'
+    await putJson(harness.port, path)
+    const directory = join(harness.dataDir, 'users', digest('alice'), 'projects', digest('alpha'))
+    await writeFile(join(directory, 'workspace', 'owned.txt'), 'owned')
+
+    await expect(deleteJson(harness.port, path)).resolves.toEqual({
+      status: 200,
+      body: { ok: true, value: { deleted: true } },
+    })
+    await expect(access(directory)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(deleteJson(harness.port, path)).resolves.toMatchObject({ status: 200 })
+    expect(harness.creates).toHaveLength(1)
   })
 
   it('maps the legacy user route and explicit default project to the original Session', async () => {

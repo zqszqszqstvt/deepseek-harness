@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { lstat, mkdir, rm, unlink } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
@@ -11,6 +11,7 @@ import {
   decodeResourceId,
   isProjectWorkspace,
   parseProjectRoute,
+  projectDataDirectory,
   projectSessionState,
   type ProjectSessionState,
 } from './project-session.ts'
@@ -52,6 +53,18 @@ async function ensureProject(state: ProjectSessionState, api: ApiProxy, persiste
   if (!created.result.ok && created.result.error.code !== 'session-conflict') {
     throw new Error(created.result.error.message)
   }
+}
+
+async function removeOwnedDirectory(path: string): Promise<void> {
+  let identity
+  try {
+    identity = await lstat(path)
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return
+    throw error
+  }
+  if (identity.isSymbolicLink()) await unlink(path)
+  else await rm(path, { recursive: true })
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -236,6 +249,7 @@ export function apply(ctx: Context, config: Config): void {
           sessionIdentity: 'user-project',
           features: [
             'session.initialize',
+            'session.delete',
             'session.history',
             'session.turns',
             'session.events',
@@ -255,6 +269,29 @@ export function apply(ctx: Context, config: Config): void {
     const state = projectSessionState(root, projectRoute.identity)
     const resource = projectRoute.resource
     try {
+      if (resource.length === 1 && resource[0] === 'session' && req.method === 'DELETE') {
+        if (active.has(String(state.sessionId))) {
+          json(res, 409, { ok: false, error: 'session is running' })
+          return
+        }
+        const initialization = projectInitialization.get(String(state.sessionId))
+        if (initialization !== undefined) await initialization
+        const agent = ctx.agents.get(state.sessionId)
+        if (agent !== undefined) await agent.ctx.fiber.dispose()
+        if (ctx.sessions.get(state.sessionId) !== undefined) {
+          throw new Error(`session "${state.sessionId}" remained live after agent disposal`)
+        }
+        const persistence = ctx.get('sessionPersistence')
+        if (!(persistence instanceof JsonlSessionPersistence)) {
+          throw new Error('server project deletion requires JSONL session persistence')
+        }
+        await persistence.deleteStoredSession(state.sessionId)
+        await ctx.serverEnvironments.deleteProject(state)
+        sseMux.dropSession(state.sessionId)
+        await removeOwnedDirectory(projectDataDirectory(state))
+        json(res, 200, { ok: true, value: { deleted: true } })
+        return
+      }
       await initializeProject(state)
       if (resource.length === 1 && resource[0] === 'session' && req.method === 'PUT') {
         json(res, 200, { ok: true, value: ctx.serverEnvironments.project(state) })

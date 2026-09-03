@@ -307,6 +307,24 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
     expect(await ctx.sessionPersistence.readRaw(m.id)).toBeUndefined()
   })
 
+  it('permanently deletes one cold session directory and is idempotent', async () => {
+    const persistence = ctx.sessionPersistence as JsonlSessionPersistence
+    const stored = meta('delete-cold', '/delete-project')
+    await persistence.create(stored)
+    await persistence.append(stored.id, oneTurnLog())
+
+    await expect(persistence.deleteStoredSession(stored.id)).resolves.toBe(true)
+    await expect(stat(sessionDir(root, '/delete-project', stored.id))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(persistence.deleteStoredSession(stored.id)).resolves.toBe(false)
+  })
+
+  it('refuses to delete a live session', async () => {
+    const persistence = ctx.sessionPersistence as JsonlSessionPersistence
+    const session = ctx.sessions.create(SessionId('delete-live'), { meta: { cwd: '/delete-project' } })
+
+    await expect(persistence.deleteStoredSession(session.id)).rejects.toThrow(/live session/)
+  })
+
   it('readRaw rejects a corrupt header line instead of exporting it', async () => {
     const m = meta('raw-corrupt', '/work')
     await ctx.sessionPersistence.create(m)
