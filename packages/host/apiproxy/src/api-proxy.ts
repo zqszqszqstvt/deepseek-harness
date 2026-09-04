@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 import { z as zod } from 'zod'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError, admitEncodedImages } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
@@ -1066,6 +1066,8 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   const presetSwitches = new Map<SessionId, Promise<unknown>>()
   /** Client-chosen identity creation/resume, deduplicated across concurrent retries. */
   const sessionCreations = new Map<SessionId, Promise<Agent>>()
+  /** Lifecycle handles and in-flight teardown for sessions this gateway owns. */
+  const sessionHandles = new Map<SessionId, { handle: AgentHandle; disposal?: Promise<void> }>()
   /** Serializes path ownership and explicit title checks with Workspace mutations. */
   let workspaceCreationChain = Promise.resolve()
   const pendingQuestions = new Map<RpcId, PendingQuestion>()
@@ -1595,11 +1597,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           // session's history was produced under that composition, and
           // rebuilding it differently would replay tool calls the model can no
           // longer make.
-          return (await ctx.agents.resume({
+          const resumed = await ctx.agents.resume({
             resumeSessionId: sessionId,
             agentOptions: agentOptions(),
             setup: (await composeAgent(storedPreset)).setup,
-          })).agent
+          })
+          sessionHandles.set(sessionId, { handle: resumed })
+          return resumed.agent
         }
 
         try {
@@ -1608,7 +1612,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
         }
         const composition = await composeAgent(presetId)
-        return (await ctx.agents.create({
+        const created = await ctx.agents.create({
           sessionId,
           agentOptions: agentOptions(),
           meta: {
@@ -1616,7 +1620,9 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             ...composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset },
           },
           setup: composition.setup,
-        })).agent
+        })
+        sessionHandles.set(sessionId, { handle: created })
+        return created.agent
       })().catch((error: unknown) => {
         // Another Host entry path may have published the same identity while
         // this operation crossed an asynchronous persistence/filesystem step.
@@ -2149,6 +2155,27 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const created = ctx.agents.get(sessionId)
         const createdPreset = created === undefined ? undefined : resolveSessionPreset(created.session)
         return ok(request, { sessionId, ...createdPreset === undefined ? {} : { agentPreset: createdPreset } })
+      },
+
+      async release(request) {
+        const { sessionId } = request.payload
+        const owned = sessionHandles.get(sessionId)
+        if (owned === undefined) return ok(request, { released: false })
+        const disposal = owned.disposal ??= Promise.resolve().then(() => owned.handle.dispose())
+        try {
+          await disposal
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'internal',
+            message: `failed to release session "${sessionId}": ${String(error)}`,
+            details: { sessionId },
+          })
+        } finally {
+          // Keep the owned record reachable until settlement so concurrent
+          // releases join the same teardown operation.
+          if (sessionHandles.get(sessionId) === owned) sessionHandles.delete(sessionId)
+        }
+        return ok(request, { released: true })
       },
 
       async history(request) {

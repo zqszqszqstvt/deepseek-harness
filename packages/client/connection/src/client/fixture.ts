@@ -2374,6 +2374,8 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         if (options.dropSessionCreateResponse) throw new Error('fixture: dropped session.create response after publication')
         return ok(request, { sessionId: created.sessionId })
       },
+      // The fixture keeps no live agent handles; release reports nothing held.
+      release: request => Promise.resolve(ok(request, { released: false })),
       rename: (request) => {
         const missing = requireSession(request)
         if (missing !== undefined) return missing

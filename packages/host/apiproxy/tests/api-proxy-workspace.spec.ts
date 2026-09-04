@@ -78,18 +78,23 @@ async function harness(
   ctx.provide('sessionPersistence', { list: () => Promise.resolve([]) } as never)
   await ctx.plugin(WorkspaceRegistry)
 
+  const disposals = new Map<SessionId, number>()
   const factory: AgentFactory = {
     async createAgent(_ownerCtx, options) {
-      const session = ctx.sessions.create(
+      const session = ctx.sessions.prepare(
         options.sessionId,
         options.meta === undefined ? {} : { meta: options.meta },
       )
+      const detachSession = ctx.sessions.enter(session)
+      ctx.sessions.announce(session)
       const agent = stubAgent(session)
       const unregister = ctx.agents.register(agent)
       return {
         agent,
         dispose: () => {
+          disposals.set(session.id, (disposals.get(session.id) ?? 0) + 1)
           unregister()
+          detachSession()
           return Promise.resolve()
         },
       }
@@ -108,7 +113,7 @@ async function harness(
     ...extras.openPath === undefined ? {} : { openPath: extras.openPath },
     ...extras.canOpenPath === undefined ? {} : { canOpenPath: extras.canOpenPath },
   })
-  return { api, ctx, storageDomain, root }
+  return { api, ctx, disposals, storageDomain, root }
 }
 
 /** Stage one directory under the harness root for path adoption. */
@@ -365,6 +370,27 @@ describe('workspace.insertBefore', () => {
 })
 
 describe('session creation and Workspace membership', () => {
+  it('releases one owned session without unloading its sibling', async () => {
+    const { api, ctx, disposals, root } = await harness()
+    const first = SessionId('session-release-first')
+    const second = SessionId('session-release-second')
+    expectOk(await api.sessions.create(request({ cwd: root, sessionId: first })))
+    expectOk(await api.sessions.create(request({ cwd: root, sessionId: second })))
+
+    const [left, right] = await Promise.all([
+      api.sessions.release(request({ sessionId: first })),
+      api.sessions.release(request({ sessionId: first })),
+    ])
+    expect(expectOk(left).released).toBe(true)
+    expect(expectOk(right).released).toBe(true)
+    expect(disposals.get(first)).toBe(1)
+    expect(ctx.agents.get(first)).toBeUndefined()
+    expect(ctx.sessions.get(first)).toBeUndefined()
+    expect(ctx.agents.get(second)).toBeDefined()
+    expect(ctx.sessions.get(second)).toBeDefined()
+    expect(expectOk(await api.sessions.release(request({ sessionId: first }))).released).toBe(false)
+  })
+
   it('attaches a preallocated idempotent session while cwd-only sessions stay ungrouped', async () => {
     const { api, ctx, root } = await harness()
     const workspace = expectOk(await api.workspace.create(request({ path: stageDir(root, 'project') }))).workspace

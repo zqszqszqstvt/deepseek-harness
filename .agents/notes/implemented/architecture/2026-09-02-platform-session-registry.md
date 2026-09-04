@@ -16,6 +16,8 @@ The authenticated platform backend owns the user-visible Session registry. It al
 
 Conversation events, approvals, questions, and execution-environment selection remain authoritative in the Server. The platform registry stores references and presentation lifecycle only; it does not duplicate the event log.
 
+Permanent deletion is Server-authoritative. The Server waits for any in-flight initialization, rejects deletion during an active turn, releases the exact Host-owned `AgentHandle`, verifies that the live Session left the store, and then removes persistence, environment state, and the project directory. The platform backend deletes its registry row only after that operation succeeds. The Host retains one handle per Session created or resumed through its API gateway and records one teardown promise while releasing it; concurrent releases await that operation without unloading sibling Sessions owned by the same plugin fiber.
+
 ## Alternatives considered
 
 **Expose persistence `list()` through HTTP.** Persistence listing is unfiltered and its headers cannot recover the original route identities from hashed paths, so the platform could neither authorize nor present the results correctly.
@@ -24,6 +26,8 @@ Conversation events, approvals, questions, and execution-environment selection r
 
 **Let the client choose `userId` and project route keys.** The Server deliberately has no authentication layer, so trusting those values would let one client address another principal's runtime state.
 
+**Dispose the live Agent's plugin fiber.** API-created Agents share the API gateway's owner fiber. Disposing that fiber would unload every sibling Session attached to it, while a bare registry lookup cannot recover the per-Agent teardown capability.
+
 ## Consequences
 
-Session discovery remains available when the Server is temporarily unavailable, while history and execution operations still require the Server. Provisioning is an idempotent cross-service operation rather than a distributed transaction. Deployments must keep the Server on a trusted backend network and must terminate authenticated client HTTP, SSE, and executor WebSocket traffic at the platform backend.
+Session discovery remains available when the Server is temporarily unavailable, while history, execution, and permanent deletion still require the Server. Provisioning and deletion are idempotent cross-service operations rather than distributed transactions. A failed Server deletion preserves the platform registry row for retry, and deletion refuses a live Session not owned through the API gateway instead of guessing at its lifecycle owner. Deployments must keep the Server on a trusted backend network and must terminate authenticated client HTTP, SSE, and executor WebSocket traffic at the platform backend.

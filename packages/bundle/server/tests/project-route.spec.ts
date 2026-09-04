@@ -37,7 +37,10 @@ function projectSessionId(userId: string, projectId: string): string {
   return `mp_${digest(`${userId}\0${projectId}`).slice(0, 40)}`
 }
 
-async function start(corsOrigin?: string): Promise<{ port: number; dataDir: string; creates: CreateCall[] }> {
+async function start(
+  corsOrigin?: string,
+  releaseError?: string,
+): Promise<{ port: number; dataDir: string; creates: CreateCall[] }> {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-server-projects-'))
   dataDirs.push(dataDir)
   const context = new Context()
@@ -51,6 +54,14 @@ async function start(corsOrigin?: string): Promise<{ port: number; dataDir: stri
         creates.push(request.payload)
         const sessionId = SessionId(request.payload.sessionId)
         return { rpcId: request.rpcId, result: { ok: true as const, value: { sessionId } } }
+      },
+      release: async (request: { rpcId: string }) => {
+        return {
+          rpcId: request.rpcId,
+          result: releaseError === undefined
+            ? { ok: true as const, value: { released: false } }
+            : { ok: false as const, error: { code: 'internal' as const, message: releaseError, details: {} } },
+        }
       },
       history: async (request: { rpcId: string; payload: { sessionId: string } }) => ({
         rpcId: request.rpcId,
@@ -200,6 +211,20 @@ describe('server project routes', () => {
     })
     await expect(access(directory)).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(deleteJson(harness.port, path)).resolves.toMatchObject({ status: 200 })
+    expect(harness.creates).toHaveLength(1)
+  })
+
+  it('keeps project data when releasing the live Session fails', async () => {
+    const harness = await start(undefined, 'release failed')
+    const path = '/v1/users/alice/projects/alpha/session'
+    await putJson(harness.port, path)
+    const directory = join(harness.dataDir, 'users', digest('alice'), 'projects', digest('alpha'))
+
+    await expect(deleteJson(harness.port, path)).resolves.toEqual({
+      status: 500,
+      body: { ok: false, error: 'server request failed' },
+    })
+    await expect(access(directory)).resolves.toBeUndefined()
     expect(harness.creates).toHaveLength(1)
   })
 

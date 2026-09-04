@@ -276,10 +276,15 @@ export function apply(ctx: Context, config: Config): void {
         }
         const initialization = projectInitialization.get(String(state.sessionId))
         if (initialization !== undefined) await initialization
-        const agent = ctx.agents.get(state.sessionId)
-        if (agent !== undefined) await agent.ctx.fiber.dispose()
+        // Initialized sessions stay attached through host-level fibers; releasing
+        // the owning handle via apiProxy detaches exactly this session. Fiber
+        // disposal here would unload every session the fiber owns.
+        const released = await ctx.apiProxy.sessions.release({
+          rpcId: RpcId(randomUUID()), payload: { sessionId: state.sessionId },
+        })
+        if (!released.result.ok) throw new Error(released.result.error.message)
         if (ctx.sessions.get(state.sessionId) !== undefined) {
-          throw new Error(`session "${state.sessionId}" remained live after agent disposal`)
+          throw new Error(`session "${state.sessionId}" remained live after release`)
         }
         const persistence = ctx.get('sessionPersistence')
         if (!(persistence instanceof JsonlSessionPersistence)) {

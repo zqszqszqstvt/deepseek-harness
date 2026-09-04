@@ -266,6 +266,14 @@ export interface SessionsApi {
   Promise<RpcResponse<{ sessionId: SessionId; agentPreset?: string }>>
 
   /**
+   * Host-only lifecycle operation, intentionally absent from RpcMethodMap.
+   * Releases the live agent and Session through the handle retained when this
+   * gateway created or resumed it. Concurrent calls await the same teardown.
+   * Returns `released: false` when this process owns no handle for the Session.
+   */
+  release(request: RpcRequest<{ sessionId: SessionId }>): Promise<RpcResponse<{ released: boolean }>>
+
+  /**
    * Reads a window of history events; page boundaries align to append-origin message
    * boundaries: one page = all raw events owned by a whole number of such messages (including
    * their chunk / tool events), never cut mid-message. Model-only replacement copies consume no
