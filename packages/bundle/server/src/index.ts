@@ -380,7 +380,19 @@ export function apply(ctx: Context, config: Config): void {
         return
       }
       if (resource.length === 1 && resource[0] === 'history' && req.method === 'GET') {
-        const result = await ctx.apiProxy.sessions.history({ rpcId: RpcId(randomUUID()), payload: { sessionId: state.sessionId } })
+        // Without pagination the tail page spans the oldest included message group
+        // through the end of the log (every tool/chunk event plus views), which grows
+        // unbounded in long sessions. Callers may therefore cap the page via ?maxMessages=N.
+        const requestUrl = new URL(req.url ?? '/', 'http://dsh')
+        const rawMaxMessages = requestUrl.searchParams.get('maxMessages')
+        const parsedMaxMessages = rawMaxMessages === null ? Number.NaN : Number(rawMaxMessages)
+        const maxMessages = Number.isSafeInteger(parsedMaxMessages) && parsedMaxMessages > 0
+          ? parsedMaxMessages
+          : undefined
+        const result = await ctx.apiProxy.sessions.history({
+          rpcId: RpcId(randomUUID()),
+          payload: { sessionId: state.sessionId, ...(maxMessages === undefined ? {} : { maxMessages }) },
+        })
         sendResult(ctx, res, 'history', result.result)
         return
       }
