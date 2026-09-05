@@ -394,9 +394,18 @@ export function apply(ctx: Context, config: Config): void {
         const maxMessages = Number.isSafeInteger(parsedMaxMessages) && parsedMaxMessages > 0
           ? parsedMaxMessages
           : undefined
+        const rawBeforeSeq = requestUrl.searchParams.get('beforeSeq')
+        const parsedBeforeSeq = rawBeforeSeq === null ? Number.NaN : Number(rawBeforeSeq)
+        const beforeSeq = Number.isSafeInteger(parsedBeforeSeq) && parsedBeforeSeq >= 0
+          ? parsedBeforeSeq
+          : undefined
         const result = await ctx.apiProxy.sessions.history({
           rpcId: RpcId(randomUUID()),
-          payload: { sessionId: state.sessionId, ...(maxMessages === undefined ? {} : { maxMessages }) },
+          payload: {
+            sessionId: state.sessionId,
+            ...(beforeSeq === undefined ? {} : { beforeSeq }),
+            ...(maxMessages === undefined ? {} : { maxMessages }),
+          },
         })
         sendResult(ctx, res, 'history', result.result)
         return
