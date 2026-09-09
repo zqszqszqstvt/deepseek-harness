@@ -79,7 +79,7 @@ describe('server startup help', () => {
       host: '127.0.0.1',
       maxConcurrentTurns: 8,
       maxSseConnections: 128,
-      maxSseConnectionsPerUser: 2,
+      maxSseConnectionsPerUser: 4,
     })
   })
 

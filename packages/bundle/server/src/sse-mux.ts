@@ -15,6 +15,9 @@ interface CachedSessionFrames {
 }
 
 const PUBLIC_STREAM_ERROR = 'event stream failed'
+const INITIAL_RETRY_DELAY_MS = 1_000
+const MAX_RETRY_DELAY_MS = 30_000
+const STABLE_STREAM_MS = 30_000
 
 /** One bounded single-consumer frame queue owned by an HTTP response. */
 export class SseClient {
@@ -101,14 +104,18 @@ export class ServerSseMux {
   private readonly clients = new Map<SessionId, Set<SseClient>>()
   private readonly userCounts = new Map<string, number>()
   private readonly cache = new Map<SessionId, CachedSessionFrames>()
-  private state: 'idle' | 'running' | 'failed' | 'disposed' = 'idle'
+  private state: 'idle' | 'running' | 'recovering' | 'disposed' = 'idle'
   private done: Promise<void> = Promise.resolve()
+  private retryTimer: ReturnType<typeof setTimeout> | undefined
+  private retryAttempt = 0
+  private streamStartedAt = 0
   private connectionCount = 0
 
   constructor(
     private readonly api: ApiProxy,
     private readonly limits: SseMuxLimits,
     private readonly reportError: (error: unknown) => void,
+    private readonly initialRetryDelayMs = INITIAL_RETRY_DELAY_MS,
   ) {}
 
   /** Number of currently registered SSE responses. */
@@ -117,13 +124,13 @@ export class ServerSseMux {
   }
 
   /** Shared mux lifecycle state for readiness diagnostics. */
-  get muxState(): 'idle' | 'running' | 'failed' | 'disposed' {
+  get muxState(): 'idle' | 'running' | 'recovering' | 'disposed' {
     return this.state
   }
 
   /** Register one response and replay its current session-specific transient baseline. */
   register(userId: string, sessionId: SessionId, lastSeq: number, closeSocket: () => void): SseRegistration {
-    if (this.state === 'failed' || this.state === 'disposed') {
+    if (this.state === 'recovering' || this.state === 'disposed') {
       return { ok: false, status: 503, error: 'event stream is unavailable' }
     }
     if (this.connectionCount >= this.limits.maxConnections) {
@@ -181,6 +188,8 @@ export class ServerSseMux {
   async dispose(): Promise<void> {
     if (this.state === 'disposed') return this.done
     this.state = 'disposed'
+    if (this.retryTimer !== undefined) clearTimeout(this.retryTimer)
+    this.retryTimer = undefined
     this.controller.abort()
     this.closeAll('shutdown')
     await this.done
@@ -189,6 +198,7 @@ export class ServerSseMux {
   private start(): void {
     if (this.state !== 'idle') return
     this.state = 'running'
+    this.streamStartedAt = Date.now()
     this.done = this.consume()
   }
 
@@ -204,8 +214,12 @@ export class ServerSseMux {
     } catch (error) {
       if (!this.controller.signal.aborted) this.fail(error)
     } finally {
-      if (this.state !== 'disposed' && this.state !== 'failed') this.state = 'failed'
-      this.closeAll(this.state === 'disposed' ? 'shutdown' : 'mux-ended')
+      if (this.state === 'disposed') {
+        this.closeAll('shutdown')
+      } else {
+        this.closeAll('mux-ended')
+        this.scheduleRecovery()
+      }
     }
   }
 
@@ -215,7 +229,6 @@ export class ServerSseMux {
     const encoded = encode(frame)
     if (payload.type === 'stream/error') {
       this.reportError(payload.error)
-      this.state = 'failed'
       this.pushAll(encode({
         rpcId: frame.rpcId,
         payload: {
@@ -248,7 +261,6 @@ export class ServerSseMux {
 
   private fail(error: unknown): void {
     this.reportError(error)
-    this.state = 'failed'
     this.pushAll(encode({
       rpcId: RpcId(randomUUID()),
       payload: {
@@ -256,6 +268,17 @@ export class ServerSseMux {
         error: { code: 'internal', message: PUBLIC_STREAM_ERROR, details: {} },
       },
     }))
+  }
+
+  private scheduleRecovery(): void {
+    if (Date.now() - this.streamStartedAt >= STABLE_STREAM_MS) this.retryAttempt = 0
+    const delay = Math.min(this.initialRetryDelayMs * 2 ** this.retryAttempt, MAX_RETRY_DELAY_MS)
+    this.retryAttempt++
+    this.state = 'recovering'
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined
+      if (this.state === 'recovering') this.state = 'idle'
+    }, delay)
   }
 
   private pushAll(frame: Buffer): void {

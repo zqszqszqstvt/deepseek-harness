@@ -69,7 +69,7 @@ function serverCommand(): Command {
     .option('--data-dir <path>', 'root directory for per-user workspaces and state')
     .option('--max-concurrent <n>', 'maximum active turns across users (default: 8)')
     .option('--max-sse-connections <n>', 'maximum open SSE responses across users (default: 128)')
-    .option('--max-sse-connections-per-user <n>', 'maximum open SSE responses per user (default: 2)')
+    .option('--max-sse-connections-per-user <n>', 'maximum open SSE responses per user (default: 4)')
     .option('--sse-buffer-bytes <n>', 'maximum queued bytes per slow SSE response (default: 1048576)')
     .option('--cors-origin <origin>', 'allow one browser origin, or * for direct Electron testing')
     .addHelpText('after', `
@@ -99,7 +99,7 @@ export function apply(ctx: Context): void {
     const maxConcurrentTurns = options.maxConcurrent === undefined ? 8 : Number(options.maxConcurrent)
     if (!Number.isSafeInteger(maxConcurrentTurns) || maxConcurrentTurns < 1) program.error('error: --max-concurrent must be at least 1')
     const maxSseConnections = options.maxSseConnections === undefined ? 128 : Number(options.maxSseConnections)
-    const maxSseConnectionsPerUser = options.maxSseConnectionsPerUser === undefined ? 2 : Number(options.maxSseConnectionsPerUser)
+    const maxSseConnectionsPerUser = options.maxSseConnectionsPerUser === undefined ? 4 : Number(options.maxSseConnectionsPerUser)
     const sseClientBufferBytes = options.sseBufferBytes === undefined ? 1048576 : Number(options.sseBufferBytes)
     if (!Number.isSafeInteger(maxSseConnections) || maxSseConnections < 1) program.error('error: --max-sse-connections must be at least 1')
     if (!Number.isSafeInteger(maxSseConnectionsPerUser) || maxSseConnectionsPerUser < 1) program.error('error: --max-sse-connections-per-user must be at least 1')

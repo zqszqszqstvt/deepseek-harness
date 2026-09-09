@@ -250,7 +250,7 @@ describe('ServerSseMux queue bounds', () => {
     expect(source.aborted).toBe(true)
   })
 
-  it('forwards one upstream terminal error and rejects later registrations', async () => {
+  it('forwards one upstream terminal error and accepts registrations after recovery', async () => {
     const source = new ControlledMux()
     const api = { events: { mux: (_request: unknown, signal: AbortSignal) => source.iterate(signal) } } as ApiProxy
     const reportError = vi.fn()
@@ -258,6 +258,7 @@ describe('ServerSseMux queue bounds', () => {
       api,
       { maxConnections: 2, maxConnectionsPerUser: 1, clientBufferBytes: 512 },
       reportError,
+      1,
     )
     const registered = mux.register('alice', sessionIdFor('alice'), -1, vi.fn())
     expect(registered.ok).toBe(true)
@@ -273,10 +274,14 @@ describe('ServerSseMux queue bounds', () => {
     expect(terminalText).not.toContain('upstream ended')
     expect(reportError).toHaveBeenCalledWith({ code: 'internal', message: 'upstream ended', details: {} })
     await expect(registered.client.take()).resolves.toBeUndefined()
-    expect(mux.muxState).toBe('failed')
+    expect(mux.muxState).toBe('recovering')
     expect(mux.register('bob', sessionIdFor('bob'), -1, vi.fn())).toEqual({
       ok: false, status: 503, error: 'event stream is unavailable',
     })
+    await vi.waitFor(() => { expect(mux.muxState).toBe('idle') })
+    const recovered = mux.register('bob', sessionIdFor('bob'), -1, vi.fn())
+    expect(recovered.ok).toBe(true)
+    await vi.waitFor(() => { expect(source.calls).toBe(2) })
     await mux.dispose()
   })
 })
