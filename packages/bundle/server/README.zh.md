@@ -8,6 +8,8 @@ dsh 的 Linux-only 多用户 HTTP 组合包。它为 URL 中的每个 `(userId, 
 
 `dsh server` 只能在 Linux 上运行，因为严格 bubblewrap 限制只在该平台上提供仅工作区可读保证。macOS 和 Windows 会在启动值发布前被拒绝，因此 HTTP 监听器和 Server Session 持久化都无法激活。该限制只属于 Server profile；其他 dsh profile 保留现有平台支持。如果 bubblewrap 不可用或无法正常工作，shell 执行会以 `SANDBOX_UNAVAILABLE` fail closed。
 
+Server profile 还会在独立 bubblewrap 进程中运行模型编写的 `workflow` 和 Ralph JavaScript。VM 逃逸只能在具有私有只读根目录、私有可写 `/tmp`、空环境且无网络的进程内访问 Node。该进程不会挂载 Server 数据根目录、用户工作区、home 目录、宿主命令、`/usr/local`、全局 Conda 环境、凭据或源代码仓库。子 agent RPC 仍留在 Server 上，由宿主校验 schema 和身份，并独立限制总数。普通非 Server profile 继续使用开销更低的 worker-thread 模式。
+
 `dsh server` 不提供身份验证层。它只能监听回环地址或可信后端网络。完成身份验证的平台后端必须从已验证主体派生每个 URL `userId`，绝不能把调用者可控的请求参数直接写入该路径。直接暴露在公网，包括不受限制地使用 `--host 0.0.0.0`，都违反此契约。
 
 平台后端负责用户可见的 Session 发现、标题、租户归属和归档状态，并通过 `PUT /v1/users/<userId>/projects/<projectId>/session` 初始化或恢复已登记的 Session。Server 持久层的 header 不含平台归属或展示元数据，因此有意不提供用户 Session 列表路由。
@@ -60,6 +62,7 @@ Electron 执行器主动建立出站 WebSocket，注册设备和项目根目录�
 
 - **身份验证属于平台后端** - Server 不验证凭据、租户或授权策略。
 - **必须使用可用 bubblewrap 的 Linux** - macOS Seatbelt 和 Windows ACL 执行无法提供多用户 Server 所需的仅工作区 shell 读取隔离；没有可用 bubblewrap 的 Linux 宿主会拒绝 shell 执行。
+- **每个 workflow 都会承担独立进程启动成本** - Server workflow 隔离保护共享文件和权限，但不限制 CPU 或内存配额；需要资源计量时，运维方可以增加部署级 cgroup。
 - **一个进程持有一个数据根目录** - 移动活跃 Session 或合并两个已占用的 Server 数据根目录会被拒绝，需要运维人员离线决策。
 - **SSE 仅在进程内生效** - 连接上限和有界客户端队列只保护单个进程；多副本部署必须自行提供路由和事件扇出策略。
 - **本地执行不支持交互模式** - 执行器支持有界文件系统操作和前台子进程，但尚不支持流式 stdin、PTY、长期后台任务、LSP 和本地 MCP。

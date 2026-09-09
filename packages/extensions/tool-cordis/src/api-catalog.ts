@@ -1267,6 +1267,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'state', description: 'project Session whose active binding changes.' }, { name: 'bindingId', description: 'requested binding from the current project view.' }],
         returns: 'the committed environment view.',
       },
+      {
+        signature: 'async deleteProject(state: ProjectSessionState): Promise<void>',
+        description: 'Permanently remove one project\'s durable selection and live binding. Active execution leases reject deletion so a tool cannot outlive its environment identity.',
+        parameters: [{ name: 'state', description: 'project Session being deleted.' }],
+      },
     ],
   },
   {

@@ -15,6 +15,9 @@ import WorkflowEngine, { WorkflowError, WorkflowRunId } from '@deepseek-ai/dsh-w
 import type { WorkflowRun, WorkflowRunInfo, WorkflowStartRequest } from '@deepseek-ai/dsh-workflow'
 import { WorkerRun } from './host.ts'
 import { validateMeta } from './meta.ts'
+import { createSandboxedProcessPeerFactory } from './process-peer.ts'
+import { createThreadPeer } from './peer.ts'
+import type { WorkflowPeerFactory } from './peer.ts'
 import type { WorkerInit, WorkerLimits } from './types.ts'
 
 export { validateMeta } from './meta.ts'
@@ -32,6 +35,12 @@ export type {
 export interface Config {
   /** The `ctx.subagents` provider children run on (default `spawn`). */
   provider?: string
+  /** Script execution substrate: an in-process thread or Linux bubblewrap child. */
+  execution?: 'worker-thread' | 'sandboxed-process'
+  /** Bubblewrap executable used by `sandboxed-process` execution. */
+  bwrapPath?: string
+  /** Maximum bytes accepted for one process-to-host JSON frame or total stderr output. */
+  maxProtocolFrameBytes?: number
   /** Concurrent `agent()` ceiling; `0` (the default) auto-resolves to `min(16, max(1, cores - 2))`. */
   maxConcurrentAgents?: number
   /** Total `agent()` calls one run may start — the runaway-loop backstop (default 1000). */
@@ -114,6 +123,9 @@ class WorkerThreadWorkflowEngine extends WorkflowEngine {
 
   static Config: z<Config> = z.object({
     provider: z.string().default('spawn'),
+    execution: z.union(['worker-thread', 'sandboxed-process'] as const).default('worker-thread'),
+    bwrapPath: z.string().default('bwrap'),
+    maxProtocolFrameBytes: z.natural().min(1024).default(1024 * 1024),
     maxConcurrentAgents: z.natural().default(0),
     maxTotalAgents: z.natural().min(1).default(1000),
     maxItemsPerCall: z.natural().min(1).default(4096),
@@ -122,12 +134,24 @@ class WorkerThreadWorkflowEngine extends WorkflowEngine {
   })
 
   private readonly config: ResolvedConfig
+  private readonly peerFactory: WorkflowPeerFactory
 
   constructor(ctx: Context, config: Config) {
     super(ctx)
     // schemastery (static Config) has already filled the defaulted fields;
     // the assertion records that resolution, not a hidden fallback.
     this.config = config as ResolvedConfig
+    if (this.config.execution === 'sandboxed-process') {
+      if (process.platform !== 'linux') {
+        throw new Error('workflow sandboxed-process execution requires Linux and bubblewrap')
+      }
+      this.peerFactory = createSandboxedProcessPeerFactory({
+        bwrapPath: this.config.bwrapPath,
+        maxProtocolFrameBytes: this.config.maxProtocolFrameBytes,
+      })
+    } else {
+      this.peerFactory = createThreadPeer
+    }
   }
 
   /**
@@ -185,6 +209,8 @@ class WorkerThreadWorkflowEngine extends WorkflowEngine {
         agentEnd: (agent) => { this.emitWorkflowEvent('workflow/agent-end', info, agent) },
       },
       request.signal,
+      this.peerFactory,
+      maxTotalAgents,
     )
 
     this.emitWorkflowEvent('workflow/start', info)

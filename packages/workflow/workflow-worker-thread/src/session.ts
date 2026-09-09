@@ -36,6 +36,14 @@ interface PendingChild {
 /** The typed post half of the port: each tag pairs with ITS payload from the map (a mismatch is a compile error at the call site). */
 type Post = <T extends WorkerToHostType>(type: T, payload: WorkerToHostPayloads[T]) => void
 
+/** Minimal ordered message port shared by worker-thread and process transports. */
+export interface WorkflowSessionPort {
+  /** Send one JSON-compatible protocol message. */
+  postMessage(message: unknown): void
+  /** Register the host-message listener. */
+  on(event: 'message', listener: (message: HostToWorkerMessage) => void): unknown
+}
+
 /**
  * The worker-side handle for one started child agent ({@link ChildHandle}):
  * every member is an RPC to the host keyed by this call's `callId`, resolved
@@ -140,7 +148,7 @@ export function requireParentPort(port: MessagePort | null): MessagePort {
  *   of an in-process `MessageChannel` in tests).
  * @param init - the run payload the host provided as `workerData`.
  */
-export async function runWorkerSession(port: MessagePort, init: WorkerInit): Promise<void> {
+export async function runWorkerSession(port: WorkflowSessionPort, init: WorkerInit): Promise<void> {
   const post: Post = (type, payload) => {
     port.postMessage({ type, ...payload })
   }

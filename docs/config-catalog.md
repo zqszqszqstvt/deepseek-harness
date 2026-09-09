@@ -1743,7 +1743,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/bundle/server/src/index.ts:133`](../packages/bundle/server/src/index.ts)
+Source: [`packages/bundle/server/src/index.ts:148`](../packages/bundle/server/src/index.ts)
 
 <a id="deepseek-aidsh-session-persistence-jsonl"></a>
 
@@ -3240,6 +3240,12 @@ Requires: `subagents`
 export interface Config {
   /** The `ctx.subagents` provider children run on (default `spawn`). */
   provider?: string
+  /** Script execution substrate: an in-process thread or Linux bubblewrap child. */
+  execution?: 'worker-thread' | 'sandboxed-process'
+  /** Bubblewrap executable used by `sandboxed-process` execution. */
+  bwrapPath?: string
+  /** Maximum bytes accepted for one process-to-host JSON frame or total stderr output. */
+  maxProtocolFrameBytes?: number
   /** Concurrent `agent()` ceiling; `0` (the default) auto-resolves to `min(16, max(1, cores - 2))`. */
   maxConcurrentAgents?: number
   /** Total `agent()` calls one run may start — the runaway-loop backstop (default 1000). */
@@ -3257,7 +3263,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/workflow/workflow-worker-thread/src/index.ts:32`](../packages/workflow/workflow-worker-thread/src/index.ts)
+Source: [`packages/workflow/workflow-worker-thread/src/index.ts:35`](../packages/workflow/workflow-worker-thread/src/index.ts)
 
 ## Loadable plugins with no config
 

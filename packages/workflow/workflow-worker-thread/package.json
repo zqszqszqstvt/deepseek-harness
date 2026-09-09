@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-workflow-worker-thread",
-  "description": "worker-thread workflow engine: executes model-written orchestration scripts off the host event loop, bridging agent() calls back to ctx.subagents",
+  "description": "isolated workflow engine: executes model-written orchestration scripts in a worker thread or Linux process sandbox, bridging agent() calls back to ctx.subagents",
   "version": "0.1.1-rc.2",
   "publishConfig": {
     "access": "public"
@@ -26,6 +26,10 @@
       "types": "./lib/types/worker.d.ts",
       "default": "./lib/worker.cjs"
     },
+    "./process-worker": {
+      "types": "./lib/types/process-worker.d.ts",
+      "default": "./lib/process-worker.cjs"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
@@ -33,6 +37,7 @@
     "lib/index.js",
     "lib/invariant.js",
     "lib/worker.cjs",
+    "lib/process-worker.cjs",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",

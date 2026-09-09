@@ -2,24 +2,24 @@
 
 English | [中文](README.zh.md)
 
-This package implements `WorkflowEngine` with one Node worker thread per run. The worker executes the orchestration script; child agents remain on the host and are reached through `ctx.subagents` over a typed host/worker protocol.
+This package implements `WorkflowEngine` with one isolated execution peer per run. The default peer is a Node worker thread; Linux deployments may select a bubblewrap-confined Node process. The peer executes the orchestration script; child agents remain on the host and are reached through `ctx.subagents` over a typed protocol.
 
-The package root exports the default engine plugin and its `Config`; the worker protocol, runtime, and session modules stay private to the implementation. The operational `./worker` entry remains the engine's spawn target.
+The package root exports the default engine plugin and its `Config`; the worker protocol, runtime, and session modules stay private to the implementation. The operational `./worker` and `./process-worker` entries are the engine's two spawn targets.
 
-The split has one primary purpose: a synchronous script loop cannot block the harness event loop, and a script that ignores cancellation can be terminated with its worker. It is not a security sandbox.
+Both peers keep a synchronous script loop off the harness event loop and let disposal terminate a script that ignores cancellation. The worker-thread mode is not a security sandbox; the process mode adds an operating-system security boundary for multi-user deployments.
 
 ## Trust and isolation boundary
 
-Workflow scripts are model-written and have the same trust premise as the model's existing bash access. `node:vm` inside a worker is an API-shaping mechanism, not a security boundary: an escaped script can recover Node capabilities with the host process's privileges.
+Workflow scripts are model-written. `node:vm` is an API-shaping mechanism, not a security boundary: an escaped script can recover Node capabilities from whichever process executes it. The execution mode determines what those capabilities can reach.
 
-The worker still provides useful containment:
+The default `worker-thread` mode provides useful operational containment but shares the Server process authority:
 
 - Script CPU work and synchronous spins stay off the host event loop.
 - `worker.terminate()` gives disposal a real final stop.
 - The worker starts with an empty environment, except unbuilt loader plumbing, so ambient credentials do not cross through `process.env`.
 - Host/worker messages use structured-clone data, with plain-JSON validation at the script boundary.
 
-A genuinely untrusted-script sandbox would require a different engine behind the same workflow seam.
+The Linux-only `sandboxed-process` mode preserves the same workflow hooks while placing the script in a fresh bubblewrap mount, PID, IPC, UTS, session, and network namespace. It exposes only the Node executable, required system library directories, the single built `process-worker.cjs` entry, `/dev`, `/proc`, and a private writable `/tmp`; it does not mount the Server data root, user workspaces, home directories, `/run`, `/etc`, host commands, `/usr/local`, global Conda installations, or the source repository. The child environment is cleared and networking is unavailable. Process-to-host JSONL frames are byte-bounded and rebuilt through host-side validation; the host independently enforces child-call identities and totals. A `node:vm` escape therefore remains inside this process sandbox instead of recovering Server authority.
 
 ## Script contract
 
@@ -36,7 +36,7 @@ Unknown options, malformed arguments, unsupported schemas, tripped caps, provide
 
 ## Run sequence
 
-`start()` validates meta, parses the body, resolves a registered normalized provider route, and resolves any per-run total-child cap before creating a worker or publishing `workflow/start`. A requested `maxTotalAgents` must be a positive safe integer no greater than the engine's configured deployment ceiling. Source mode installs TypeScript transforms through a data-URL bootstrap; built mode passes sibling `lib/worker.cjs` as a filesystem path because pkg's VFS hook expects CommonJS. Both work under ordinary Node. A ready/go handshake prevents a start-signal cancellation racing worker boot from executing the script's initial synchronous slice.
+`start()` validates meta, parses the body, resolves a registered normalized provider route, and resolves any per-run total-child cap before creating an execution peer or publishing `workflow/start`. A requested `maxTotalAgents` must be a positive safe integer no greater than the engine's configured deployment ceiling. Worker-thread source mode installs TypeScript transforms through a data-URL bootstrap; built mode passes sibling `lib/worker.cjs` as a filesystem path because pkg's VFS hook expects CommonJS. Sandboxed-process mode requires the built sibling `lib/process-worker.cjs`, so it never mounts the source repository. A ready/go handshake prevents a start-signal cancellation racing peer boot from executing the script's initial synchronous slice.
 
 For each `agent()` call:
 
@@ -70,13 +70,16 @@ Terminal outcome is first-wins at host claim points. An accepted external cancel
 
 Worker error, message failure, or premature exit closes message admission before cleanup, then resolves `error` unless cancellation already owns the run. Late queued messages cannot create children or narrate after that logical boundary.
 
-The host keeps a ledger of forwarded child starts. A graceful worker supplies their ends; death or force termination synthesizes any missing end as cancelled. Every forwarded `workflow/agent-start` is therefore paired exactly once, although cleanup after an already-arrived workflow result may complete afterward.
+The host keeps a ledger of forwarded child starts. A graceful peer supplies their ends; death or force termination synthesizes any missing end as cancelled. For an untrusted process peer, lifecycle messages must name a real host-published child with an unused identity, terminal identity must match its accepted start, and `agentsStarted` comes from the host rather than the process. Every forwarded `workflow/agent-start` is therefore paired exactly once, although cleanup after an already-arrived workflow result may complete afterward.
 
 ## Config
 
 | Key | Default | Meaning |
 |---|---|---|
 | `provider` | `spawn` | Host-side subagent provider used by `agent()`. |
+| `execution` | `worker-thread` | Execution boundary: `worker-thread` or Linux-only `sandboxed-process`. |
+| `bwrapPath` | `bwrap` | Bubblewrap executable used by `sandboxed-process`. |
+| `maxProtocolFrameBytes` | `1048576` | Maximum bytes accepted for one process JSONL frame or total stderr output. |
 | `maxConcurrentAgents` | `0` | Concurrent `agent()` ceiling; `0` resolves from available CPU parallelism. |
 | `maxTotalAgents` | `1000` | Total `agent()` calls in one run. |
 | `maxItemsPerCall` | `4096` | Items accepted by one `parallel()` or `pipeline()` call. |
@@ -117,8 +120,10 @@ Append-only; newly visible content follows the reusable request prefix and does 
 
 ## Known Limitations and Deferred Work
 
-- **The worker/vm is not a security boundary** — model-written code can escape `node:vm` and reach the worker's process authority; a hostile-code deployment needs a separate-process or container engine.
-- **One worker thread is paid per run** — there is no pool, warm runtime, or cross-run script cache.
-- **No ambient timers, filesystem, or network are injected, but escaped code can still reach Node** — the missing globals are portability API, not containment.
+- **Worker-thread mode is not a security boundary** — model-written code can escape `node:vm` and reach the host process authority; multi-user deployments must select `sandboxed-process` or provide an equivalent outer container.
+- **Sandboxed-process mode requires Linux, usable bubblewrap, and built package artifacts** — it fails closed when its process entry cannot be found or launched.
+- **One worker thread or process is paid per run** — there is no pool, warm runtime, or cross-run script cache; the process mode adds process and namespace startup cost.
+- **No CPU or memory quota is applied** — namespaces isolate authority and shared files, not hardware consumption; deployment-level cgroups remain the operator's responsibility.
+- **No ambient timers, filesystem, or network are injected into the VM** — in worker-thread mode an escape can still reach Node; in sandboxed-process mode escaped Node access remains confined.
 - **Termination can only report host-observed starts** — `agentsStarted` excludes worker-side calls still queued behind concurrency when a forced termination makes them unknowable.
 - **Cross-realm errors fail `instanceof Error` inside scripts** — workflow authors must branch on stable fields such as `name` and `code`.

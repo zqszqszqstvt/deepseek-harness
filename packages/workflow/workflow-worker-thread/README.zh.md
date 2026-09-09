@@ -2,24 +2,24 @@
 
 [English](README.md) | 中文
 
-本包为 `WorkflowEngine` 提供实现，每次运行使用一个 Node worker thread。worker 执行编排脚本；子 agent（智能体）留在宿主上，脚本通过带类型的宿主／worker 协议经由 `ctx.subagents` 访问它们。
+本包为 `WorkflowEngine` 提供实现，每次运行使用一个隔离执行 peer。默认 peer 是 Node worker thread；Linux 部署可以选择由 bubblewrap 限制的 Node 进程。peer 执行编排脚本；子 agent（智能体）留在宿主上，脚本通过带类型的协议经由 `ctx.subagents` 访问它们。
 
-包根目录默认导出引擎插件及其 `Config`；worker 协议、运行时和会话模块均为实现私有。操作入口 `./worker` 仍是引擎的 spawn 目标。
+包根目录默认导出引擎插件及其 `Config`；worker 协议、运行时和会话模块均为实现私有。操作入口 `./worker` 和 `./process-worker` 是引擎的两个 spawn 目标。
 
-这种拆分只有一个主要目的：同步脚本循环不能阻塞 harness 事件循环，忽略取消的脚本可以连同其 worker 一起终止。它不是安全沙箱。
+两种 peer 都让同步脚本循环无法阻塞 harness 事件循环，并让 dispose 可以终止忽略取消的脚本。worker-thread 模式不是安全沙箱；进程模式为多用户部署增加操作系统安全边界。
 
 ## 信任与隔离边界
 
-工作流脚本由模型编写，信任前提与模型已有的 bash 访问相同。worker 内的 `node:vm` 是塑造 API 的机制，不是安全边界：逃逸的脚本可以用宿主进程权限重新取得 Node 能力。
+工作流脚本由模型编写。`node:vm` 是塑造 API 的机制，不是安全边界：逃逸的脚本可以从执行它的进程重新取得 Node 能力。执行模式决定这些能力可以访问什么。
 
-worker 仍提供实用的隔离：
+默认 `worker-thread` 模式提供实用的运行隔离，但与 Server 进程共享权限：
 
 - 脚本 CPU 工作和同步自旋不会占用宿主事件循环；
 - `worker.terminate()` 为 dispose（资源释放）提供真实的最终停止手段；
 - 除未构建 loader 所需的衔接配置外，worker 以空环境启动，因此环境凭据不会通过 `process.env` 跨越边界；
 - 宿主/worker 消息使用结构化克隆数据，并在脚本边界执行普通 JSON 校验。
 
-真正的不可信脚本沙箱需要在同一工作流 seam 背后采用不同引擎。
+仅 Linux 可用的 `sandboxed-process` 模式保留相同的工作流钩子，同时把脚本放入新的 bubblewrap 挂载、PID、IPC、UTS、会话和网络 namespace。它只暴露 Node 可执行文件、必需的系统库目录、单个已构建 `process-worker.cjs` 入口、`/dev`、`/proc` 和私有可写 `/tmp`；不会挂载 Server 数据根目录、用户工作区、home 目录、`/run`、`/etc`、宿主命令、`/usr/local`、全局 Conda 安装或源代码仓库。子进程环境会被清空，网络不可用。进程到宿主的 JSONL 帧有字节上限，并由宿主重新校验和构造；宿主还会独立限制子 agent 调用身份与总数。因此，`node:vm` 逃逸仍被限制在该进程沙箱内，无法取得 Server 权限。
 
 ## 脚本约定
 
@@ -36,7 +36,7 @@ worker 仍提供实用的隔离：
 
 ## 运行顺序
 
-`start()` 会校验 meta、解析脚本正文、解析一个已注册且规范化的提供方路由，并解析每次运行的子 agent 总数上限，然后才创建 worker 或发布 `workflow/start`。请求的 `maxTotalAgents` 必须是正安全整数，且不能超过引擎配置的部署上限。源代码模式通过 data URL bootstrap 安装 TypeScript 转换；构建模式把同级 `lib/worker.cjs` 作为文件系统路径传入，因为 pkg 的虚拟文件系统（VFS）钩子要求 CommonJS。两者都能在普通 Node 下运行。ready/go 握手可以避免启动信号取消与 worker 启动发生竞态，导致脚本最初的同步片段被执行。
+`start()` 会校验 meta、解析脚本正文、解析一个已注册且规范化的提供方路由，并解析每次运行的子 agent 总数上限，然后才创建执行 peer 或发布 `workflow/start`。请求的 `maxTotalAgents` 必须是正安全整数，且不能超过引擎配置的部署上限。worker-thread 源代码模式通过 data URL bootstrap 安装 TypeScript 转换；构建模式把同级 `lib/worker.cjs` 作为文件系统路径传入，因为 pkg 的虚拟文件系统（VFS）钩子要求 CommonJS。sandboxed-process 模式要求存在已构建的同级 `lib/process-worker.cjs`，因此绝不会挂载源代码仓库。ready/go 握手可以避免启动信号取消与 peer 启动发生竞态，导致脚本最初的同步片段被执行。
 
 对于每次 `agent()` 调用：
 
@@ -70,13 +70,16 @@ subagent seam 只有一个取消通道：请求信号。不存在单独的子 ag
 
 worker 错误、消息失败或提前退出会在清理前关闭消息接纳，然后以 `error` 兑现；如果取消已经接管该运行，则不覆盖取消。后到的排队消息无法在该逻辑边界后创建子 agent 或发出叙述。
 
-宿主会维护已转发子 agent 启动的台账。优雅退出的 worker 会提供对应的结束事件；死亡或强制终止会把缺失的结束事件合成为已取消。因此，每个已转发的 `workflow/agent-start` 都会且只会配对一次，不过已经到达的工作流结果之后的清理可能稍后才完成。
+宿主会维护已转发子 agent 启动的台账。优雅退出的 peer 会提供对应的结束事件；死亡或强制终止会把缺失的结束事件合成为已取消。对于不可信进程 peer，生命周期消息必须指向宿主实际发布且身份未使用的 child，终态身份必须与已接受的启动一致，`agentsStarted` 也以宿主记录为准。因此，每个已转发的 `workflow/agent-start` 都会且只会配对一次，不过已经到达的工作流结果之后的清理可能稍后才完成。
 
 ## 配置
 
 | 键 | 默认值 | 含义 |
 |---|---|---|
 | `provider` | `spawn` | `agent()` 使用的宿主侧 subagent 提供方。 |
+| `execution` | `worker-thread` | 执行边界：`worker-thread` 或仅 Linux 可用的 `sandboxed-process`。 |
+| `bwrapPath` | `bwrap` | `sandboxed-process` 使用的 bubblewrap 可执行文件。 |
+| `maxProtocolFrameBytes` | `1048576` | 单个进程 JSONL 帧或 stderr 总输出允许的最大字节数。 |
 | `maxConcurrentAgents` | `0` | 并发 `agent()` 上限；`0` 会根据可用 CPU 并行度解析。 |
 | `maxTotalAgents` | `1000` | 一次运行中的 `agent()` 调用总数。 |
 | `maxItemsPerCall` | `4096` | 一次 `parallel()` 或 `pipeline()` 调用接受的条目数。 |
@@ -117,8 +120,10 @@ worker 错误、消息失败或提前退出会在清理前关闭消息接纳，�
 
 ## 已知限制与暂缓事项
 
-- **worker/vm 不是安全边界**：模型编写的代码可以逃逸 `node:vm` 并取得 worker 的进程权限；不可信代码部署需要独立进程或容器引擎。
-- **每次运行都要支付一个 worker thread 的成本**：没有池、预热运行时或跨运行脚本缓存。
-- **不注入默认可用的定时器、文件系统或网络，但逃逸代码仍可访问 Node**：这些缺失的全局变量属于可移植性 API 设计，而非隔离措施。
+- **worker-thread 模式不是安全边界**：模型编写的代码可以逃逸 `node:vm` 并取得宿主进程权限；多用户部署必须选择 `sandboxed-process` 或提供等效的外层容器。
+- **sandboxed-process 模式要求 Linux、可用的 bubblewrap 和已构建包产物**：找不到或无法启动进程入口时会失败关闭。
+- **每次运行都要支付一个 worker thread 或进程的成本**：没有池、预热运行时或跨运行脚本缓存；进程模式还会增加进程和 namespace 启动成本。
+- **不限制 CPU 或内存配额**：namespace 隔离权限和共享文件，而不隔离硬件消耗；部署级 cgroup 仍由运维方负责。
+- **VM 中不注入默认可用的定时器、文件系统或网络**：在 worker-thread 模式中，逃逸仍可访问 Node；在 sandboxed-process 模式中，逃逸后的 Node 访问仍受限制。
 - **终止只能报告宿主观察到的启动**：`agentsStarted` 不包括因并发限制仍在 worker 侧排队、且在强制终止后无法得知的调用。
 - **跨 realm 错误在脚本内无法通过 `instanceof Error`**：工作流作者必须根据 `name` 和 `code` 等稳定字段分支。

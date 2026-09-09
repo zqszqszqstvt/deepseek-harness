@@ -8,6 +8,8 @@ The Linux-only multi-user HTTP bundle for dsh. It creates one deterministic Sess
 
 `dsh server` runs only on Linux, where strict bubblewrap confinement provides workspace-only reads. macOS and Windows are rejected before startup values are published, so the HTTP listener and Server Session persistence cannot activate. This restriction belongs to the Server profile; other dsh profiles retain their existing platform support. If bubblewrap is unavailable or unusable, shell execution fails closed with `SANDBOX_UNAVAILABLE`.
 
+The Server profile also runs model-written `workflow` and Ralph JavaScript in a separate bubblewrap process. A VM escape can access Node only inside a private read-only root with a private writable `/tmp`, cleared environment, and no network. The process does not mount the Server data root, user workspaces, home directories, host commands, `/usr/local`, global Conda environments, credentials, or the source repository. Child-agent RPC remains on the Server and is schema-validated, identity-checked, and independently capped by the host. Ordinary non-Server profiles retain the lower-overhead worker-thread mode.
+
 `dsh server` has no authentication layer. Keep it on loopback or a trusted backend network. The authenticating platform backend must derive every URL `userId` from its authenticated principal and must never copy a caller-controlled request parameter into that path. A direct public bind, including an unrestricted `--host 0.0.0.0`, violates this contract.
 
 The platform backend owns user-visible Session discovery, titles, tenant ownership, and archival state. It uses `PUT /v1/users/<userId>/projects/<projectId>/session` to initialize or resume one registered Session. Server persistence intentionally does not expose a user Session-list route because its headers do not contain platform ownership or presentation metadata.
@@ -58,6 +60,7 @@ The stable `shell` and switch definitions join the tool prefix and remain reusab
 
 - **Authentication belongs to the platform backend** - the Server does not validate credentials, tenants, or authorization policy.
 - **Linux with usable bubblewrap is required** - macOS Seatbelt and Windows ACL execution do not provide the workspace-only shell-read isolation required by the multi-user Server; a Linux host without usable bubblewrap rejects shell execution.
+- **Each workflow pays separate-process startup cost** - Server workflow isolation protects shared files and authority but does not impose CPU or memory quotas; operators may add deployment-level cgroups when resource accounting is required.
 - **One process owns one data root** - moving a live Session or merging two occupied Server data roots is rejected and requires an offline operator decision.
 - **SSE is process-local** - connection limits and bounded client queues protect one process, but a multi-replica deployment must provide its own routing and event fan-out policy.
 - **Local execution is non-interactive** - the executor supports bounded filesystem operations and foreground subprocesses, but streaming stdin, PTY, long-running background jobs, LSP, and local MCP remain unavailable.

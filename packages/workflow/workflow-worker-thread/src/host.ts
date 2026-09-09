@@ -6,10 +6,6 @@
  * @module @deepseek-ai/dsh-workflow-worker-thread/host
  */
 
-import { tmpdir } from 'node:os'
-import { Worker } from 'node:worker_threads'
-import type { WorkerOptions } from 'node:worker_threads'
-import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { assertNever } from '@deepseek-ai/dsh-llm'
@@ -21,73 +17,14 @@ import { renderThrown } from './realm.ts'
 import type { ExecutionObserver } from './runtime.ts'
 import { HostToWorkerType, WorkerToHostType } from './protocol.ts'
 import type { HostToWorkerPayloads, WorkerToHostMessage } from './protocol.ts'
+import { createThreadPeer } from './peer.ts'
+import type { WorkflowPeer, WorkflowPeerFactory } from './peer.ts'
 import type { ChildResult, ChildStartRequest, WorkerInit } from './types.ts'
 
 /** One published child and its shared quiescent-disposal transaction. */
 interface ChildRecord {
   readonly run: SubagentRun
   disposal?: Promise<void>
-}
-
-/**
- * The scrubbed worker environment: no ambient credentials, no loader flags.
- * Windows derives `os.tmpdir()` from `TMP`/`TEMP` and falls back to the
- * literal relative path `undefined\temp` when the environment is empty, so
- * tsx's transform cache would land in a cwd-relative `undefined/temp`
- * directory; the host's real temp path (not a credential) is injected there.
- * The unbuilt shape additionally forwards `TSX_TSCONFIG_PATH` for path
- * resolution.
- * @param platform - host platform; overridable so tests exercise both peer arms.
- * @param tsconfigPath - the tsconfig pin to forward; only the unbuilt caller
- *   passes one, so the built worker never observes the host's pin.
- * @returns the scrubbed worker environment object.
- */
-export function workerSpawnEnv(
-  platform: NodeJS.Platform = process.platform,
-  tsconfigPath?: string,
-): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {}
-  if (platform === 'win32') {
-    const tmp = tmpdir()
-    env.TMP = tmp
-    env.TEMP = tmp
-  }
-  if (tsconfigPath !== undefined) env.TSX_TSCONFIG_PATH = tsconfigPath
-  return env
-}
-
-/**
- * Resolve a built worker bundle or an unbuilt bootstrap that installs both tsx
- * transforms inside the worker. Both shapes clear `execArgv` and the ambient
- * environment (the worker only sees the platform temp path and, unbuilt,
- * `TSX_TSCONFIG_PATH`).
- * @param init - the run payload, passed as `workerData`.
- * @returns the entry path or URL and the Worker options to spawn it with.
- */
-function resolveWorkerSpawn(init: WorkerInit): { entry: string | URL; options: WorkerOptions } {
-  /* v8 ignore next 3 -- the built-output arm: tests always run unbuilt (src/); the built-worker e2e exercises this shape for real */
-  if (!import.meta.url.endsWith('.ts')) {
-    return { entry: fileURLToPath(new URL('./worker.cjs', import.meta.url)), options: { workerData: init, env: workerSpawnEnv(), execArgv: [] } }
-  }
-  // Resolve tsx only for unbuilt consumers and install it before importing TS.
-  const workerEntry = new URL('./worker.ts', import.meta.url)
-  const tsxEsmApiEntry = import.meta.resolve('tsx/esm/api')
-  const tsxCjsApiEntry = import.meta.resolve('tsx/cjs/api')
-  const bootstrap = [
-    `import { register as registerEsm } from ${JSON.stringify(tsxEsmApiEntry)}`,
-    `import { register as registerCjs } from ${JSON.stringify(tsxCjsApiEntry)}`,
-    'registerCjs()',
-    'registerEsm()',
-    `await import(${JSON.stringify(workerEntry.href)})`,
-  ].join('\n')
-  return {
-    entry: new URL(`data:text/javascript,${encodeURIComponent(bootstrap)}`),
-    options: {
-      workerData: init,
-      env: workerSpawnEnv(undefined, process.env.TSX_TSCONFIG_PATH),
-      execArgv: [],
-    },
-  }
 }
 
 /**
@@ -110,7 +47,7 @@ export class WorkerRun implements WorkflowRun {
   private workerDeathObserved = false
   private cancelReason: string | undefined
   private graceTimer: NodeJS.Timeout | undefined
-  private readonly worker: Worker
+  private readonly worker: WorkflowPeer
   /** Set on `exit`: the thread is gone, so posting has nowhere to go. */
   private workerGone = false
   /** Accepted `child-start` messages — the terminate-path `agentsStarted` (see module doc). */
@@ -119,6 +56,8 @@ export class WorkerRun implements WorkflowRun {
   private readonly children = new Map<number, ChildRecord>()
   /** Provider starts that have not yet fulfilled or rejected. */
   private readonly pendingStarts = new Set<Promise<void>>()
+  /** Every accepted child call id; an untrusted peer cannot reuse one after disposal. */
+  private readonly acceptedCallIds = new Set<number>()
   /** Started-but-not-ended agents by seq — the pairing ledger the HOST guarantees (see {@link endAgent}). */
   private readonly liveAgents = new Map<number, WorkflowAgentInfo>()
   private readonly quiescenceWaiters: (() => void)[] = []
@@ -140,13 +79,14 @@ export class WorkerRun implements WorkflowRun {
     private readonly disposeGraceMs: number,
     private readonly observer: ExecutionObserver,
     signal: AbortSignal | undefined,
+    peerFactory: WorkflowPeerFactory = createThreadPeer,
+    private readonly maxTotalAgents = Number.MAX_SAFE_INTEGER,
   ) {
     this.result = new Promise<WorkflowResult>((resolve) => { this.settleResolve = resolve })
     // workerData rides the structured clone: args are plain JSON by the seam
     // contract, so the clone is total and doubles as the caller-isolation
     // copy (a clone failure throws loud out of start()).
-    const { entry, options } = resolveWorkerSpawn(init)
-    this.worker = new Worker(entry, options)
+    this.worker = peerFactory(init)
     this.worker.on('message', (message: WorkerToHostMessage) => { this.onMessage(message) })
     this.worker.on('error', (error) => { this.onWorkerDeath(`workflow worker failed: ${renderThrown(error)}`, false) })
     /* v8 ignore next -- messageerror: not constructible from the engine's own protocol (every payload is JSON data) */
@@ -287,8 +227,7 @@ export class WorkerRun implements WorkflowRun {
         if (this.cancelReason === undefined) this.observer.log(message.message)
         break
       case WorkerToHostType.AgentStart:
-        this.liveAgents.set(message.info.seq, message.info)
-        this.observer.agentStart(message.info)
+        this.acceptAgentStart(message.info)
         break
       case WorkerToHostType.AgentEnd:
         // NOT suppressed on cancel: cancelled children report their paired
@@ -335,6 +274,18 @@ export class WorkerRun implements WorkflowRun {
       this.post(HostToWorkerType.ChildStartError, { callId, rendered: initialFailure.rendered })
       return
     }
+    if (this.acceptedCallIds.has(callId)) {
+      this.post(HostToWorkerType.ChildStartError, { callId, rendered: `workflow child call id ${callId} was already used` })
+      return
+    }
+    if (this.hostStarted >= this.maxTotalAgents) {
+      this.post(HostToWorkerType.ChildStartError, {
+        callId,
+        rendered: `workflow exceeded the host-enforced maxTotalAgents limit (${this.maxTotalAgents})`,
+      })
+      return
+    }
+    this.acceptedCallIds.add(callId)
     this.hostStarted += 1
     const task = this.startChild(callId, request)
     this.pendingStarts.add(task)
@@ -423,6 +374,17 @@ export class WorkerRun implements WorkflowRun {
     void this.disposeChild(callId, record).then(() => { this.post(HostToWorkerType.ChildDisposed, { callId }) })
   }
 
+  /** Accept narration only when an untrusted process names a real host child. */
+  private acceptAgentStart(info: WorkflowAgentInfo): void {
+    if (!this.worker.trustedMessages) {
+      const namesPublishedChild = [...this.children.values()].some(record => record.run.id === info.childId)
+      const childAlreadyNarrated = [...this.liveAgents.values()].some(live => live.childId === info.childId)
+      if (!namesPublishedChild || childAlreadyNarrated || this.liveAgents.has(info.seq)) return
+    }
+    this.liveAgents.set(info.seq, info)
+    this.observer.agentStart(info)
+  }
+
   /**
    * Start (or join) one registered child's disposal; the registry entry
    * leaves when it settles. Memoized per callId: the worker's dispose RPC,
@@ -493,6 +455,7 @@ export class WorkerRun implements WorkflowRun {
     // callbacks, but that internal post-result cleanup must not retroactively
     // rewrite the worker result that arrived first.
     const cancellationWasRequested = this.cancelReason !== undefined
+    if (!this.worker.trustedMessages) result = { ...result, agentsStarted: this.hostStarted }
     // Claim before settlement cleanup invokes provider disposal. Once Result
     // won, a later cancellation cannot rewrite it.
     this.terminalClaimed = true
@@ -500,6 +463,9 @@ export class WorkerRun implements WorkflowRun {
     // workflow becomes externally settled. Cleanup remains independently
     // tracked by childQuiescence and the holder's dispose().
     this.reapChildren('workflow settled')
+    // A compromised process may omit or forge its final lifecycle messages.
+    // Close every accepted host-validated start before workflow/end.
+    if (!this.worker.trustedMessages) this.endStrandedAgents()
     if (!cancellationWasRequested) {
       this.settleResult(result)
       return
@@ -558,6 +524,9 @@ export class WorkerRun implements WorkflowRun {
    * @param end - the settlement to emit (worker-reported or synthesized).
    */
   private endAgent(end: WorkflowAgentEndInfo): void {
+    const start = this.liveAgents.get(end.seq)
+    if (!this.worker.trustedMessages && (start === undefined
+      || start.label !== end.label || start.phase !== end.phase || start.childId !== end.childId)) return
     /* v8 ignore next -- a real end still in flight across the grace force-settle: not orderable in-process */
     if (!this.liveAgents.delete(end.seq)) return
     this.observer.agentEnd(end)

@@ -159,6 +159,13 @@
   config:
     strictReads: true
 
+# Model-written workflow JavaScript runs outside the multi-user Server process.
+# The process sandbox exposes only its runtime, a private /tmp, and no network.
+- id: workflow-worker-thread
+  config:
+    provider: spawn
+    execution: sandboxed-process
+
 - id: tool-fs-search
   config:
     sampleOverCapGlobResults: false

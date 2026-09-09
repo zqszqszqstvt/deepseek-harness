@@ -26,4 +26,14 @@ export default defineConfig([
     dts: false,
     clean: false,
   },
+  {
+    entry: ['lib/types/process-worker.js'],
+    outDir: 'lib',
+    format: ['cjs'],
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    dts: false,
+    clean: false,
+  },
 ])

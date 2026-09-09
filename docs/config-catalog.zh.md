@@ -3242,6 +3242,12 @@ export interface Config {
 export interface Config {
   /** The `ctx.subagents` provider children run on (default `spawn`). */
   provider?: string
+  /** Script execution substrate: an in-process thread or Linux bubblewrap child. */
+  execution?: 'worker-thread' | 'sandboxed-process'
+  /** Bubblewrap executable used by `sandboxed-process` execution. */
+  bwrapPath?: string
+  /** Maximum bytes accepted for one process-to-host JSON frame or total stderr output. */
+  maxProtocolFrameBytes?: number
   /** Concurrent `agent()` ceiling; `0` (the default) auto-resolves to `min(16, max(1, cores - 2))`. */
   maxConcurrentAgents?: number
   /** Total `agent()` calls one run may start — the runaway-loop backstop (default 1000). */
@@ -3259,7 +3265,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/workflow/workflow-worker-thread/src/index.ts:32`](../packages/workflow/workflow-worker-thread/src/index.ts)
+来源：[`packages/workflow/workflow-worker-thread/src/index.ts:35`](../packages/workflow/workflow-worker-thread/src/index.ts)
 
 ## 无配置的可加载插件
 

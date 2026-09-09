@@ -109,6 +109,14 @@ project(state: ProjectSessionState): ProjectEnvironmentsView
  * @returns the committed environment view.
  */
 async switch(state: ProjectSessionState, bindingId: ServerBindingId): Promise<ProjectEnvironmentsView>
+
+/**
+ * Permanently remove one project's durable selection and live binding.
+ * Active execution leases reject deletion so a tool cannot outlive its
+ * environment identity.
+ * @param state - project Session being deleted.
+ */
+async deleteProject(state: ProjectSessionState): Promise<void>
 ```
 
 Source: [`packages/bundle/server/src/environments.ts`](../../packages/bundle/server/src/environments.ts)

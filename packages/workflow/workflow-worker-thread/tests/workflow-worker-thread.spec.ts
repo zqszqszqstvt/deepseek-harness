@@ -10,7 +10,7 @@ import type { SubagentCapabilities, SubagentProvider, SubagentResult, SubagentRu
 import type { WorkflowMeta, WorkflowResult, WorkflowResultInfo, WorkflowRun, WorkflowRunInfo } from '@deepseek-ai/dsh-workflow'
 import * as workerEngineModule from '../src/index.ts'
 import WorkerThreadWorkflowEngine, { type Config } from '../src/index.ts'
-import { workerSpawnEnv } from '../src/host.ts'
+import { workerSpawnEnv } from '../src/peer.ts'
 import { HostToWorkerType, WorkerToHostType } from '../src/protocol.ts'
 import { SessionId } from '@deepseek-ai/dsh-session'
 
@@ -1412,6 +1412,27 @@ describe('dsh-workflow-worker-thread', () => {
   })
 
   describe('service API', () => {
+    it('rejects sandboxed-process off Linux and selects it on Linux without spawning eagerly', async () => {
+      const platform = vi.spyOn(process, 'platform', 'get')
+      try {
+        platform.mockReturnValue('win32')
+        const nonLinux = new Context()
+        await nonLinux.plugin(SubagentRuntime)
+        await expect(nonLinux.plugin(WorkerThreadWorkflowEngine, { execution: 'sandboxed-process' })).rejects.toThrow(
+          'requires Linux and bubblewrap',
+        )
+        await nonLinux.fiber.dispose()
+        platform.mockReturnValue('linux')
+        const linux = new Context()
+        await linux.plugin(SubagentRuntime)
+        const fiber = await linux.plugin(WorkerThreadWorkflowEngine, { execution: 'sandboxed-process' })
+        await fiber.dispose()
+        await linux.fiber.dispose()
+      } finally {
+        platform.mockRestore()
+      }
+    })
+
     it('run ids are unique and lifecycle meta is the run\'s borrowed immutable value', async () => {
       const { ctx, parent } = await setup()
       let eventMeta: WorkflowRunInfo | undefined

@@ -181,6 +181,9 @@ export default defineConfig({
         'packages/*/*/src/types.ts',
         'packages/*/*/src/bin.ts',
         'packages/*/*/src/worker.ts',
+        // Like worker.ts, this is a self-executing child entry. Built and
+        // Linux sandbox smokes exercise it outside Vitest's coverage process.
+        'packages/workflow/workflow-worker-thread/src/process-worker.ts',
         // Dynamic Host/Client composition is covered by its focused lifecycle
         // tests and assembled application checks rather than per-file coverage.
         'packages/self-modification/*/src/**/*.{ts,tsx}',
