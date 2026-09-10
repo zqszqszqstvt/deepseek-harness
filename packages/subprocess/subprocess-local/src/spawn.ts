@@ -31,11 +31,12 @@ import { linuxProcessGroupHasLiveMembers } from './process-inspector.ts'
  * parent base using the target platform's environment-key semantics. A string
  * deliberately restores or overrides an entry; an explicit `undefined`
  * tombstone removes an ordinary ambient entry.
- * @param extra - explicit caller entries and tombstones, merged after the scrub.
+ * @param extra - explicit caller entries and tombstones, merged after the base.
+ * @param inheritParent - whether the base is the scrubbed ambient environment.
  * @returns the environment to hand to `spawn` for the child process.
  */
-export function childEnv(extra?: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv {
-  const env = scrubbedParentEnv()
+export function childEnv(extra?: Readonly<NodeJS.ProcessEnv>, inheritParent = true): NodeJS.ProcessEnv {
+  const env = inheritParent ? scrubbedParentEnv() : {}
   if (process.platform !== 'win32') return { ...env, ...extra }
   let entries: [string, string | undefined][] = Object.entries(env)
   for (const [key, value] of Object.entries(extra ?? {})) {
@@ -331,10 +332,15 @@ function signalTree(
  * only spawn failures reject.
  * @param spec - fully resolved argv, cwd, stdio, grace, cancellation, environment, and spill directory.
  * @param internals - test-only spill-directory, platform, and taskkill overrides.
+ * @param environment - an already resolved child environment; omission preserves the ambient-scrub default.
  * @returns live subprocess handle.
  * @throws when `graceMs` cannot be represented by one Node timer.
  */
-export function spawnSubprocess(spec: SubprocessSpawnSpec, internals: SpawnInternals = {}): LocalSubprocessHandle {
+export function spawnSubprocess(
+  spec: SubprocessSpawnSpec,
+  internals: SpawnInternals = {},
+  environment?: NodeJS.ProcessEnv,
+): LocalSubprocessHandle {
   if (!Number.isFinite(spec.graceMs) || spec.graceMs <= 0 || spec.graceMs > MAX_TIMER_DELAY_MS) {
     throw new Error(`subprocess graceMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
   }
@@ -359,7 +365,7 @@ export function spawnSubprocess(spec: SubprocessSpawnSpec, internals: SpawnInter
   const errMode = spec.stdio.stderr
   const stdinMode = spec.stdio.stdin
 
-  const env = childEnv(spec.env)
+  const env = environment ?? childEnv(spec.env)
   const child = spawn(program, args, {
     cwd: spec.cwd,
     env,

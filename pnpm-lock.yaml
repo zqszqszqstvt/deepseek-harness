@@ -8013,6 +8013,9 @@ importers:
 
   packages/subprocess/subprocess-local:
     dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
       koffi:
         specifier: ^3.1.0
         version: 3.1.1

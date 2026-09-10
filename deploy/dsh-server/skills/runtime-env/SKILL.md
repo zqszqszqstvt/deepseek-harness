@@ -5,11 +5,11 @@ description: Use when a task needs Python or Node.js packages, a virtual environ
 
 # Language runtimes
 
-Pick the branch for the active execution environment first. Both branches share three rules: state never crosses calls, so the environment, the directory, and every cache variable go on the same command line; runtimes are invoked by absolute path; and nothing is installed globally, because the shared layer is read-only inside a session.
+Pick the branch for the active execution environment first. Both branches share three rules: shell state never crosses calls, so the environment and directory go on the same command line; runtimes are invoked by absolute path; and nothing is installed globally, because the shared layer is read-only inside a session.
 
 ## Cloud branch (Linux + bubblewrap)
 
-Visible read-only: `/usr` (including `/usr/local`), `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`, `/run`. Writable: this session's workspace, plus a private `/tmp` that is destroyed when the call ends. Not present at all: `$HOME`, `/home`, `/opt`, `/var`, `/srv`, other users' workspaces. Network is available. Foreground calls are capped at 60 seconds (120 maximum); stdin is closed.
+Visible read-only: `/usr` (including `/usr/local`), `/bin`, `/sbin`, `/lib`, `/lib64`, and a minimal `/etc`. Writable: this session's workspace, its `$HOME` at `<workspace>/.home`, and a private `/tmp` destroyed when the call ends. Not present: `/run`, `/home`, `/opt`, `/var`, `/srv`, host account files, host Git/npm config, and other users' workspaces. Public network destinations are available; host loopback, private/shared/link-local ranges, cloud metadata, and multicast are blocked. Foreground calls are capped at 60 seconds (120 maximum), background calls at 30 minutes, and stdin is closed.
 
 Shared layer, provided by the deployment and read-only:
 
@@ -20,7 +20,7 @@ Shared layer, provided by the deployment and read-only:
 | `/usr/local/bin/node`, `/usr/local/bin/npm`, `/usr/local/bin/npx`, `/usr/local/bin/pnpm` | shared Node.js LTS and its package managers |
 | `/etc/pip.conf`, `/etc/uv/uv.toml` | optional index config; absent means the public index |
 
-Always use these absolute paths. Bare `python3`, `node`, or `npm` resolves through the PATH inherited from the Server process, which can name directories that do not exist inside a session. Writing anywhere in the shared layer returns EROFS, because the strict profile ro-binds `/usr`: that is the isolation contract, and per-task packages belong in a workspace-local environment.
+Use these absolute paths when interpreter selection matters. PATH is fixed to `/usr/local/bin:/usr/bin:/bin`, and the executor assigns Python, uv, pip, npm, and pnpm caches below `<workspace>/.cache`. Writing anywhere in the shared layer returns EROFS because the strict profile ro-binds `/usr`; per-task packages belong in a workspace-local environment.
 
 ### Python stage 0 — probe once, in a single call
 
@@ -30,12 +30,12 @@ cat /etc/pip.conf 2>/dev/null | head -5
 /usr/local/bin/python3 -c 'import urllib.request as u; print("net=", u.urlopen("https://pypi.org/simple/", timeout=8).status)' 2>&1 | tail -1
 ```
 
-Do not probe `$HOME` (`touch $HOME/.wtest`, `df -h $HOME`): it is not mounted, so the call is wasted.
+Do not redirect caches or configuration to a service-user or host path. The project HOME and cache directories are created with the workspace.
 
 ### Python stage 1 — create the environment inside the workspace
 
 ```sh
-UV_CACHE_DIR="$PWD/.cache/uv" /usr/local/bin/uv venv .venv --python /usr/local/bin/python3
+/usr/local/bin/uv venv .venv --python /usr/local/bin/python3
 ```
 
 Fallback when `uv` is unavailable:
@@ -49,7 +49,7 @@ Fallback when `uv` is unavailable:
 Submit with `run_in_background: true`. The command must be self-contained, because nothing carries over:
 
 ```sh
-mkdir -p .cache && UV_CACHE_DIR="$PWD/.cache/uv" /usr/local/bin/uv pip install \
+mkdir -p .cache && /usr/local/bin/uv pip install \
   --python .venv/bin/python pandas==2.2.3 > .cache/install.log 2>&1; echo "exit=$?" >> .cache/install.log
 ```
 
@@ -58,9 +58,9 @@ Collect with `job_output` (use `wait: true` only when genuinely blocked). A fini
 pip equivalent, and the two fallbacks:
 
 ```sh
-PIP_CACHE_DIR="$PWD/.cache/pip" .venv/bin/python -m pip install -q --no-input pandas==2.2.3 > .cache/install.log 2>&1
+.venv/bin/python -m pip install -q --no-input pandas==2.2.3 > .cache/install.log 2>&1
 # no venv possible (missing ensurepip): install into a directory and inline PYTHONPATH on EVERY later command
-PIP_CACHE_DIR="$PWD/.cache/pip" /usr/local/bin/python3 -m pip install -q --no-input --target .pylibs pandas==2.2.3
+/usr/local/bin/python3 -m pip install -q --no-input --target .pylibs pandas==2.2.3
 PYTHONPATH="$PWD/.pylibs" /usr/local/bin/python3 script.py
 ```
 
@@ -76,25 +76,23 @@ Verification ③ is what proves the install stayed inside the workspace instead 
 
 ### Node.js — install into the workspace
 
-Every cache default lives under `$HOME`, which does not exist here, so each one must be redirected on the same command line. Install into the workspace's own `node_modules`; `-g` targets `/usr/local` and fails EROFS.
+Install into the workspace's own `node_modules`; the executor has already put npm's cache under `<workspace>/.cache/npm`. `-g` targets the shared layer and fails EROFS.
 
 ```sh
-mkdir -p .cache && npm_config_cache="$PWD/.cache/npm" /usr/local/bin/npm install \
+mkdir -p .cache && /usr/local/bin/npm install \
   --no-audit --no-fund > .cache/npm.log 2>&1; echo "exit=$?" >> .cache/npm.log
 ```
 
-pnpm equivalent — the store must be redirected too, or it defaults under `$HOME`:
+pnpm equivalent; its store is already assigned below the workspace cache:
 
 ```sh
-mkdir -p .cache && npm_config_cache="$PWD/.cache/npm" \
-  npm_config_store_dir="$PWD/.cache/pnpm-store" \
-  /usr/local/bin/pnpm install > .cache/pnpm.log 2>&1; echo "exit=$?" >> .cache/pnpm.log
+mkdir -p .cache && /usr/local/bin/pnpm install > .cache/pnpm.log 2>&1; echo "exit=$?" >> .cache/pnpm.log
 ```
 
 A single package, and a long install (both belong in a background job when they may exceed 60 seconds):
 
 ```sh
-npm_config_cache="$PWD/.cache/npm" /usr/local/bin/npm install --no-audit --no-fund zod > .cache/npm.log 2>&1
+/usr/local/bin/npm install --no-audit --no-fund zod > .cache/npm.log 2>&1
 ```
 
 ### Node.js — run and verify

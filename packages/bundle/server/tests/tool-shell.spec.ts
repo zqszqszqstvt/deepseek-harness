@@ -39,6 +39,7 @@ async function start(
   policy?: SandboxExecutionPolicy,
   runResult?: ShellRunResult,
   background?: { process: ShellProcess; capture(hooks: JobHooks): void },
+  config: ToolShell.Config = {},
 ) {
   context = new Context()
   const resolve = vi.fn((request: ShellExecRequest) => request as ShellExecSpec)
@@ -66,7 +67,7 @@ async function start(
   }
   await context.plugin(SystemPrompt)
   await context.plugin(ToolRuntime)
-  await context.plugin(ToolShell)
+  await context.plugin(ToolShell, config)
   return { resolve, run, start: startProcess }
 }
 
@@ -170,7 +171,14 @@ describe('server shell tool', () => {
     const shell = await start(selection, workspaceWritePolicy(workspace))
 
     expect(await callShell()).toMatchObject({ isError: false })
-    expect(shell.resolve).toHaveBeenCalledWith(expect.objectContaining({ workdir: workspace }))
+    const request = shell.resolve.mock.lastCall?.[0]
+    expect(request?.workdir).toBe(workspace)
+    expect(request?.env).toMatchObject({
+      HOME: join(workspace, '.home'),
+      PATH: '/usr/local/bin:/usr/bin:/bin',
+      UV_CACHE_DIR: join(workspace, '.cache', 'uv'),
+      npm_config_cache: join(workspace, '.cache', 'npm'),
+    })
   })
 
   it('publishes a cloud collector spill path inside the project workspace', async () => {
@@ -284,6 +292,42 @@ describe('server shell tool', () => {
     const published = /full output: (.+)]/.exec(settled)?.[1]
     expect(published?.startsWith(join(workspace, '.dsh', 'spill'))).toBe(true)
     expect(await readFile(String(published), 'utf8')).toBe('complete background output')
+  })
+
+  it('kills a cloud background command at the configured lifetime', async () => {
+    vi.useFakeTimers()
+    try {
+      const { selection, workspace } = await cloudSelection()
+      let hooks: JobHooks | undefined
+      let finish!: () => void
+      const kill = vi.fn(() => {
+        finish()
+        return true
+      })
+      const process: ShellProcess = {
+        status: 'running', exitCode: null, signal: null,
+        done: new Promise<void>((resolve) => { finish = resolve }),
+        kill,
+        readOutput: () => ({ delta: '', lossy: false }),
+      }
+      await start(selection, workspaceWritePolicy(workspace), undefined, {
+        process,
+        capture(next) { hooks = next },
+      }, { backgroundTimeoutMs: 60_000 })
+
+      await context!.tools.execute({
+        signal: new AbortController().signal,
+        callId: CallId('shell-background-timeout'),
+        name: 'shell',
+        arguments: { command: 'long-command', description: 'Run a long command', run_in_background: true },
+      })
+      expect(hooks).toBeDefined()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(kill).toHaveBeenCalledOnce()
+      await expect(hooks?.done).resolves.toEqual({ status: 'killed', detail: 'timed out after 60000ms' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it.each(['../outside', '/etc', 'nested/../../outside'])(

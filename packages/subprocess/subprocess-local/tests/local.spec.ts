@@ -29,6 +29,30 @@ function spec(command: string, overrides: Partial<SubprocessSpawnSpec> = {}): Su
 }
 
 describe('LocalSubprocessRuntime', () => {
+  it('can replace the ambient environment with an explicit deployment base', async () => {
+    const inheritedName = 'SUBPROCESS_LOCAL_AMBIENT_PROBE'
+    const previous = process.env[inheritedName]
+    process.env[inheritedName] = 'must-not-leak'
+    const ctx = new Context()
+    const fiber = await ctx.plugin(LocalSubprocessRuntime, {
+      inheritParentEnv: false,
+      baseEnv: { PATH: dirname(process.execPath), SUBPROCESS_LOCAL_BASE: 'base-visible' },
+    })
+    try {
+      const executable = await ctx.subprocess.resolveExecutable(basename(process.execPath))
+      const processHandle = ctx.subprocess.spawn(spec('unused', {
+        argv: [executable, '-e', `console.log([process.env.${inheritedName} ?? 'absent', process.env.SUBPROCESS_LOCAL_BASE, process.env.SUBPROCESS_LOCAL_CALL].join('/'))`],
+        env: { SUBPROCESS_LOCAL_CALL: 'call-visible' },
+      }))
+      await processHandle.done
+      expect(processHandle.collected.stdout?.readFrom(0).text).toBe('absent/base-visible/call-visible\n')
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, inheritedName)
+      else process.env[inheritedName] = previous
+      await fiber.dispose()
+    }
+  })
+
   it('places the host-exit finalizer before listeners that predate the service', async () => {
     const baseline = new Set(process.listeners('exit'))
     const prior = vi.fn()

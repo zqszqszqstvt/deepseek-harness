@@ -84,7 +84,7 @@ kit_pnpm() { env PATH="/usr/local/bin:$PATH" /usr/local/bin/pnpm "$@"; }
 contract_summary() {
   local missing=0 target
   echo "== contract summary =="
-  local required="/usr/local/bin/python3 /usr/local/bin/uv /etc/uv/uv.toml $SKILL_ROOT/runtime-env/SKILL.md"
+  local required="/usr/local/bin/python3 /usr/local/bin/uv /usr/local/libexec/dsh-netns-bwrap /usr/local/share/dsh/runtime-etc/hosts /usr/local/share/dsh/runtime-etc/nsswitch.conf /usr/local/share/dsh/runtime-etc/resolv.conf /etc/uv/uv.toml $SKILL_ROOT/runtime-env/SKILL.md"
   if [ "$WITH_NODE" -eq 1 ]; then
     required="$required /usr/local/bin/node /usr/local/bin/npm"
   fi
@@ -133,14 +133,23 @@ echo "== 1. system packages =="
 # unconditionally (packages/sandbox/sandbox-local/src/profiles.ts:19-45).
 if [ "$PKG" = apt ]; then
   apt-get update -qq
-  pkg_install bubblewrap ca-certificates curl git xz-utils
+  pkg_install bubblewrap ca-certificates curl git nftables passt xz-utils
 else
   "$PKG" makecache -q >/dev/null 2>&1 || "$PKG" makecache >/dev/null 2>&1 || true
-  pkg_install bubblewrap ca-certificates curl git xz which
+  pkg_install bubblewrap ca-certificates curl git nftables passt xz which
 fi
 command -v bwrap >/dev/null || { echo "   FAIL: bubblewrap did not install (on CentOS 7 it needs EPEL)" >&2; exit 1; }
+command -v pasta >/dev/null || { echo "   FAIL: pasta is required (install the passt package, enabling EPEL/CRB when needed)" >&2; exit 1; }
+command -v nft >/dev/null || { echo "   FAIL: nft is required (install the nftables package)" >&2; exit 1; }
 [ -d /lib64 ] || install -d /lib64
 echo "   bwrap $(bwrap --version 2>&1 | head -1)"
+echo "   pasta $(pasta --version 2>&1 | head -1)"
+
+install -d -m 0755 /usr/local/libexec /usr/local/share/dsh/runtime-etc
+install -m 0755 "$HERE/dsh-netns-bwrap" /usr/local/libexec/dsh-netns-bwrap
+install -m 0644 "$HERE/hosts" /usr/local/share/dsh/runtime-etc/hosts
+install -m 0644 "$HERE/nsswitch.conf" /usr/local/share/dsh/runtime-etc/nsswitch.conf
+install -m 0644 "$HERE/resolv.conf" /usr/local/share/dsh/runtime-etc/resolv.conf
 
 echo "== 2. interpreter: the distribution's python3 =="
 if ! pick_python >/dev/null 2>&1; then
@@ -226,7 +235,7 @@ fi
 echo "== 4. optional index config under /etc =="
 # Both files are mirror-free by default: agents install from the public index.
 # They still matter, because uv.toml pins link-mode=copy (hardlinks fail across
-# filesystems) and python-downloads=never (there is no $HOME in the sandbox).
+# filesystems) and python-downloads=never (the project HOME must not gain runtimes).
 # Never put credentials in them: agents can cat /etc/pip.conf.
 install -m 0644 "$HERE/pip.conf" /etc/pip.conf
 install -d -m 0755 /etc/uv
@@ -252,6 +261,7 @@ echo "== 6. harden the files this kit installed =="
 # blanket chmod under `set -e` aborts the install halfway. Pass --lock-all only
 # on a host you know has no such tree.
 KIT_OWN_PATHS=(/usr/local/bin/uv /usr/local/bin/uvx /usr/local/share/dsh
+               /usr/local/libexec/dsh-netns-bwrap
                /etc/pip.conf /etc/uv/uv.toml
                /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
                /usr/local/bin/pnpm /usr/local/lib/node_modules)
@@ -338,7 +348,11 @@ install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 \
 
 if [ "$WITH_SYSTEMD" -eq 1 ] && command -v systemctl >/dev/null 2>&1; then
   echo "== 10. systemd unit =="
-  DSH_BIN="$(command -v dsh || echo /usr/local/bin/dsh)"
+  DSH_BIN="$(command -v dsh || true)"
+  if [ -z "$DSH_BIN" ] || [ ! -x "$DSH_BIN" ]; then
+    echo "   FAIL: install the pinned dsh release on PATH, then rerun this installer" >&2
+    exit 1
+  fi
   sed -e "s|@DSH_HOME@|$DSH_HOME_DIR|g" \
       -e "s|@DATA_DIR@|$DATA_DIR|g" \
       -e "s|@SERVICE_USER@|$SERVICE_USER|g" \

@@ -1771,7 +1771,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/bundle/server/src/index.ts:148`](../packages/bundle/server/src/index.ts)
+Source: [`packages/bundle/server/src/index.ts:152`](../packages/bundle/server/src/index.ts)
 
 <a id="deepseek-aidsh-session-persistence-jsonl"></a>
 
@@ -2462,6 +2462,22 @@ export interface Config {
 ```
 
 Source: [`packages/e2b/subprocess-e2b/src/index.ts:25`](../packages/e2b/subprocess-e2b/src/index.ts)
+
+<a id="deepseek-aidsh-subprocess-local"></a>
+
+## `@deepseek-ai/dsh-subprocess-local`
+
+```ts config-catalog
+/** Environment inheritance for one local subprocess provider. */
+export interface Config {
+  /** Keep the scrubbed parent environment as the child base. */
+  inheritParentEnv?: boolean
+  /** Explicit base entries present before each spawn's own environment. */
+  baseEnv?: Record<string, string>
+}
+```
+
+Source: [`packages/subprocess/subprocess-local/src/index.ts:32`](../packages/subprocess/subprocess-local/src/index.ts)
 
 <a id="deepseek-aidsh-system-prompt"></a>
 
@@ -3372,7 +3388,6 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-skill-badge` — requires `skills` ([`packages/skill/skill-badge/src/index.ts`](../packages/skill/skill-badge/src/index.ts))
 - `@deepseek-ai/dsh-storage` ([`packages/storage/storage/src/index.ts`](../packages/storage/storage/src/index.ts))
 - `@deepseek-ai/dsh-subagent` ([`packages/subagent/subagent/src/index.ts`](../packages/subagent/subagent/src/index.ts))
-- `@deepseek-ai/dsh-subprocess-local` ([`packages/subprocess/subprocess-local/src/index.ts`](../packages/subprocess/subprocess-local/src/index.ts))
 - `@deepseek-ai/dsh-terminal` ([`packages/terminal/terminal/src/index.ts`](../packages/terminal/terminal/src/index.ts))
 - `@deepseek-ai/dsh-tool-ask-user` — requires `tools` · `userQuestions` ([`packages/interaction/tool-ask-user/src/index.ts`](../packages/interaction/tool-ask-user/src/index.ts))
 - `@deepseek-ai/dsh-tool-call-timeout-policy` — requires `tools` ([`packages/guard/timeout-policy/src/index.ts`](../packages/guard/timeout-policy/src/index.ts))

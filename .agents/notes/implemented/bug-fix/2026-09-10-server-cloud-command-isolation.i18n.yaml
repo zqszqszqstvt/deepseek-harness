@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-10-server-cloud-command-isolation.md
+2026-09-10-server-cloud-command-isolation.md: f78f361ecf616d24a045ac2b745e813310ffff60
+2026-09-10-server-cloud-command-isolation.zh.md: ba77ec7be1683a5af2ad400c9c91748db343090f

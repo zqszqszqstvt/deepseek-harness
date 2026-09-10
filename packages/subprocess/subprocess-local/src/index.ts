@@ -12,6 +12,7 @@ import { constants } from 'node:fs'
 import { access, stat } from 'node:fs/promises'
 import { delimiter, extname, isAbsolute, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import * as nodePty from 'node-pty'
 import type { IPtyForkOptions } from 'node-pty'
 import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
@@ -27,6 +28,14 @@ import { createProcessInspector } from './process-inspector.ts'
 import type { ProcessInspector } from './process-inspector.ts'
 import { LocalTerminalHandle } from './terminal.ts'
 
+/** Environment inheritance for one local subprocess provider. */
+export interface Config {
+  /** Keep the scrubbed parent environment as the child base. */
+  inheritParentEnv?: boolean
+  /** Explicit base entries present before each spawn's own environment. */
+  baseEnv?: Record<string, string>
+}
+
 /**
  * Local subprocess service: detached process trees, Node-shaped stdio
  * dispositions (raw pipes, inherit, bounded tail-keep collection with spill
@@ -35,6 +44,11 @@ import { LocalTerminalHandle } from './terminal.ts'
  * JavaScript-observable host exit.
  */
 export class LocalSubprocessRuntime extends SubprocessRuntime {
+  static Config: z<Config> = z.object({
+    inheritParentEnv: z.boolean().default(true),
+    baseEnv: z.dict(z.string()).default({}),
+  })
+
   /** Live handles retained for normal disposal and synchronous host-exit finalization. */
   private live = new Set<LocalSubprocessHandle>()
   /** Live terminals retained through normal quiescence or host-exit finalization. */
@@ -44,8 +58,13 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   /** Test hook for platform process inspection; production resolves lazily on terminal spawn. */
   terminalInspector: ProcessInspector | undefined
 
-  constructor(ctx: Context) {
+  private readonly inheritParentEnv: boolean
+  private readonly baseEnv: Readonly<Record<string, string>>
+
+  constructor(ctx: Context, config: Config = {}) {
     super(ctx)
+    this.inheritParentEnv = config.inheritParentEnv !== false
+    this.baseEnv = config.baseEnv ?? {}
     ctx.effect(() => {
       const onHostExit = (): void => { this.terminateForHostExit() }
       process.prependListener('exit', onHostExit)
@@ -57,6 +76,11 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
         }
       }
     }, 'local subprocess teardown')
+  }
+
+  /** Merge the configured base and one caller's entries with platform key semantics. */
+  private childEnvironment(extra?: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv {
+    return childEnv({ ...this.baseEnv, ...extra }, this.inheritParentEnv)
   }
 
   private terminateForHostExit(): void {
@@ -108,7 +132,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   ): Promise<string> {
     if (command.length === 0) throw new Error('subprocess-local: executable must be non-empty')
     signal?.throwIfAborted()
-    const environment = childEnv(env)
+    const environment = this.childEnvironment(env)
     const absolute = isAbsolute(command)
     if (!absolute && (command.includes('/') || (process.platform === 'win32' && command.includes('\\')))) {
       throw new Error(
@@ -144,7 +168,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   }
 
   spawn(spec: SubprocessSpawnSpec): SubprocessHandle {
-    const handle = spawnSubprocess(spec, this.internals)
+    const handle = spawnSubprocess(spec, this.internals, this.childEnvironment(spec.env))
     this.live.add(handle)
     // Release ownership only once the whole TREE is gone, not at direct-child
     // settlement — a TERM-trapping helper that outlives the leader must stay
@@ -169,7 +193,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
       rows: spec.rows,
       cols: spec.cols,
       cwd: spec.cwd,
-      env: childEnv(spec.env),
+      env: this.childEnvironment(spec.env),
     }
     const inspector = this.terminalInspector ?? createProcessInspector()
     const terminal = nodePty.spawn(file, [...spec.argv.slice(1)], options)

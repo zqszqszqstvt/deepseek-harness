@@ -46,6 +46,10 @@
       config:
         - id: cloud-subprocess
           name: '@deepseek-ai/dsh-subprocess-local'
+          config:
+            inheritParentEnv: false
+            baseEnv:
+              PATH: /usr/local/bin:/usr/bin:/bin
 
         - id: cloud-fs
           name: '@deepseek-ai/dsh-fs-sandbox'
@@ -84,6 +88,8 @@
 
     - id: tool-server-shell
       name: '@deepseek-ai/dsh-server/tool-shell'
+      config:
+        backgroundTimeoutMs: 1800000
 
     - id: api-gateway
       name: '@deepseek-ai/dsh-host-apiproxy'
@@ -157,6 +163,24 @@
 - id: sandbox
   config:
     strictFilesystem: true
+    runnerCommand:
+      - pasta
+      - --foreground
+      - --quiet
+      - --config-net
+      - --no-map-gw
+      - --dns-forward
+      - 192.0.2.53
+      - --tcp-ports
+      - none
+      - --udp-ports
+      - none
+      - --
+      - /usr/local/libexec/dsh-netns-bwrap
+    runnerFailureSignatures:
+      - 'pasta:'
+      - 'dsh-netns-bwrap:'
+      - 'bwrap:'
 
 - id: fs-sandbox
   config:

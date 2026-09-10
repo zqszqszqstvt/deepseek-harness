@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Install the execution-plane egress policy before entering the bwrap filesystem sandbox.
+set -euo pipefail
+
+find_system_tool() {
+  local candidate
+  for candidate in "/usr/sbin/$1" "/usr/bin/$1" "/sbin/$1" "/bin/$1"; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+NFT="$(find_system_tool nft || true)"
+BWRAP="$(find_system_tool bwrap || true)"
+
+[ -n "$NFT" ] || {
+  echo 'dsh-netns-bwrap: nft is unavailable' >&2
+  exit 125
+}
+[ -n "$BWRAP" ] || {
+  echo 'dsh-netns-bwrap: bwrap is unavailable' >&2
+  exit 125
+}
+
+# pasta creates a fresh user and network namespace before invoking this file.
+# The strict bwrap profile explicitly drops all capabilities from the model
+# command, so it cannot remove these rules. DNS uses pasta's synthetic forwarder
+# at 192.0.2.53.
+"$NFT" -f - <<'EOF' || {
+table inet dsh_egress {
+  chain output {
+    type filter hook output priority filter; policy accept;
+
+    ip daddr 192.0.2.53 udp dport 53 accept
+    ip daddr 192.0.2.53 tcp dport 53 accept
+
+    ip daddr {
+      0.0.0.0/8,
+      10.0.0.0/8,
+      100.64.0.0/10,
+      168.63.129.16/32,
+      169.254.0.0/16,
+      172.16.0.0/12,
+      192.0.0.0/24,
+      192.0.2.0/24,
+      192.168.0.0/16,
+      198.18.0.0/15,
+      224.0.0.0/4,
+      240.0.0.0/4
+    } reject
+
+    ip6 daddr {
+      ::/128,
+      fc00::/7,
+      fe80::/10,
+      ff00::/8
+    } reject
+  }
+}
+EOF
+  echo 'dsh-netns-bwrap: could not install nftables egress policy' >&2
+  exit 125
+}
+
+exec "$BWRAP" "$@"

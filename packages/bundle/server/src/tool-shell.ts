@@ -1,7 +1,8 @@
 /** Model-facing shell Consumer whose dialect follows the active execution environment. */
 
-import { isAbsolute, relative as hostRelative, resolve as resolveHostPath, posix, win32 } from 'node:path'
+import { isAbsolute, join, relative as hostRelative, resolve as resolveHostPath, posix, win32 } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import { resolveConfinedCwd } from '@deepseek-ai/dsh-sandbox'
@@ -33,6 +34,18 @@ declare module '@deepseek-ai/dsh-jobs' {
 export const name = 'tool-server-shell'
 export const inject = ['tools', 'shell', 'shellEnv', 'systemPrompt', 'serverRuntimeRouter']
 
+const DEFAULT_BACKGROUND_TIMEOUT_MS = 30 * 60 * 1_000
+
+/** Server shell limits. */
+export interface Config {
+  /** Maximum lifetime of one cloud background command. */
+  backgroundTimeoutMs?: number
+}
+
+export const Config: z<Config> = z.object({
+  backgroundTimeoutMs: z.number().min(60_000).max(24 * 60 * 60 * 1_000).default(DEFAULT_BACKGROUND_TIMEOUT_MS),
+})
+
 interface ShellToolArgs {
   readonly command: string
   readonly description: string
@@ -63,6 +76,29 @@ function validateArgs(args: ShellToolArgs): void {
   if (args.description.trim().length === 0) throw new Error('invalid description: expected a non-empty string')
   if (args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0)) {
     throw new Error(`invalid timeoutMs: expected a positive number, got ${JSON.stringify(args.timeoutMs)}`)
+  }
+}
+
+/** Exact environment exposed to one cloud command after ambient inheritance is disabled. */
+function cloudEnvironment(workspaceRoot: string): Record<string, string> {
+  const home = join(workspaceRoot, '.home')
+  const cache = join(workspaceRoot, '.cache')
+  return {
+    HOME: home,
+    PATH: '/usr/local/bin:/usr/bin:/bin',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TMPDIR: '/tmp',
+    XDG_CACHE_HOME: cache,
+    XDG_CONFIG_HOME: join(home, '.config'),
+    XDG_DATA_HOME: join(home, '.local', 'share'),
+    XDG_STATE_HOME: join(home, '.local', 'state'),
+    UV_CACHE_DIR: join(cache, 'uv'),
+    UV_PYTHON_DOWNLOADS: 'never',
+    PIP_CACHE_DIR: join(cache, 'pip'),
+    npm_config_cache: join(cache, 'npm'),
+    npm_config_store_dir: join(cache, 'pnpm-store'),
+    PYTHONNOUSERSITE: '1',
   }
 }
 
@@ -205,9 +241,10 @@ function presentResult(args: unknown, result: ToolResult): ToolResultView | unde
 }
 
 /** Register one environment-neutral shell tool for Server Sessions. */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config): void {
   const runtime: ServerRuntimeRouter = ctx.serverRuntimeRouter
   const sandboxPolicy: SandboxPolicyService | undefined = ctx.get('sandboxPolicy')
+  const backgroundTimeoutMs = config.backgroundTimeoutMs ?? DEFAULT_BACKGROUND_TIMEOUT_MS
   ctx.systemPrompt.section({
     name: 'tool:shell',
     order: 105,
@@ -221,7 +258,7 @@ export function apply(ctx: Context): void {
       description: { type: 'string', required: true, description: 'Concise active-voice description shown in the UI.' },
       timeoutMs: { type: 'number', description: 'Foreground timeout in milliseconds, capped at 120000.' },
       workdir: { type: 'string', description: 'Working directory in the active environment. Relative paths resolve from its project root.' },
-      run_in_background: { type: 'boolean', description: 'Start a cloud command as a background job. Local environments reject this option.' },
+      run_in_background: { type: 'boolean', description: `Start a cloud command as a background job, capped at ${backgroundTimeoutMs}ms. Local environments reject this option.` },
     },
     output: {
       schema: {
@@ -285,10 +322,12 @@ export function apply(ctx: Context): void {
       // Resolved before the workdir so one identity decides both the confinement
       // and the directory the command starts in.
       const workdir = resolveWorkdir(args.workdir, execution, selection, policy)
+      const workspaceRoot = policy?.workspaceRoot ?? execution.agent?.session.header.cwd ?? selection.state.cwd
       const request = {
         command: args.command,
         workdir,
         ...(args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs }),
+        ...(selection.environment.type === 'cloud' ? { env: cloudEnvironment(workspaceRoot) } : {}),
         dshEnv: ctx.shellEnv.collect(execution),
         ...(policy === undefined ? {} : { sandboxPolicy: policy }),
       }
@@ -310,12 +349,19 @@ export function apply(ctx: Context): void {
           run: () => {
             const process = ctx.shell.start(ctx.shell.resolve(request))
             const output = new ServerBackgroundOutput(ctx, selection.state)
+            let expired = false
+            const timeout = setTimeout(() => {
+              expired = process.kill()
+            }, backgroundTimeoutMs)
+            timeout.unref()
             return {
               cancel: () => { process.kill() },
               done: process.done.then(async () => {
                 await output.settle(process)
-                return processOutcome(process)
-              }),
+                return expired
+                  ? { status: 'killed' as const, detail: `timed out after ${backgroundTimeoutMs}ms` }
+                  : processOutcome(process)
+              }).finally(() => { clearTimeout(timeout) }),
               readOutput: () => output.read(process),
             }
           },

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, rm, unlink } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
@@ -40,6 +40,10 @@ interface EnvironmentSwitchBody { bindingId?: unknown }
 
 async function ensureProject(state: ProjectSessionState, api: ApiProxy, persistence: unknown): Promise<void> {
   await mkdir(state.cwd, { recursive: true })
+  await Promise.all([
+    mkdir(join(state.cwd, '.home'), { recursive: true, mode: 0o700 }),
+    mkdir(join(state.cwd, '.cache'), { recursive: true, mode: 0o700 }),
+  ])
   if (persistence instanceof JsonlSessionPersistence) {
     const stored = await persistence.readRaw(state.sessionId)
     if (stored !== undefined && stored.meta.cwd !== state.cwd) {

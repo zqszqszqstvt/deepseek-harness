@@ -16,7 +16,7 @@
 
 Server 只把 `userId` 用作路由和隔离键，不将其视为身份认证。可信平台后端必须提供该值。Electron 授权本地根目录并强制执行物理路径边界；Server 不同步文件，也不会在本地错误后回退到云端执行。云端 shell 调用的工作目录会在 spawn 之前被限制在会话工作区内，而 Server Session 交予路径的产物——被截断的命令输出与过大的工具结果——会 spill 到同一个工作区内部，因此模型收到的路径就是其自身读取边界可以重新打开的路径。
 
-指令与 skill 的投递遵循同一条边界，而桌面 profile 依赖的两个宿主位置在该边界下是静默失效的。`$DSH_HOME/AGENTS.md` 经 `ctx.fs` 探测，因此 Server 会话将其观察为 unavailable 并跳过，且不产生任何诊断；`$DSH_HOME/skills` 与 `$DSH_AGENTS_HOME/skills` 被当作不存在，因为本地 skill provider 把被拒的读取映射成路径缺失。bundled skill 根是 Server 会话唯一会读到的宿主 skill 目录，因为它的 provider 用宿主文件系统调用列举并读取该根，并将其标记为可信。常驻的部署文案属于 `system-prompt` 的 persona 行，base 组合把它挂为空并明写这是部署的选择。agent 运行时的环境准备——`/usr/local` 下的只读共享工具链、`/etc` 下的包镜像源、配额、以及验收探针——由[部署套件](../../deploy/dsh-server/README.zh.md)持有。
+指令与 skill 的投递遵循同一条边界，而桌面 profile 依赖的两个宿主位置在该边界下是静默失效的。`$DSH_HOME/AGENTS.md` 经 `ctx.fs` 探测，因此 Server 会话将其观察为 unavailable 并跳过，且不产生任何诊断；`$DSH_HOME/skills` 与 `$DSH_AGENTS_HOME/skills` 被当作不存在，因为本地 skill provider 把被拒的读取映射成路径缺失。bundled skill 根是 Server 会话唯一会读到的宿主 skill 目录，因为它的 provider 用宿主文件系统调用列举并读取该根，并将其标记为可信。常驻的部署文案属于 `system-prompt` 的 persona 行，base 组合把它挂为空并明写这是部署的选择。[部署套件](../../deploy/dsh-server/README.zh.md)负责只读共享运行时、最小 `/etc`、私有网络 namespace、固定项目环境、宿主准备与在线验收流程。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 

@@ -196,6 +196,8 @@ describe('server project routes', () => {
         cwd: join(harness.dataDir, 'users', userKey, 'projects', digest('alpha'), 'workspace'),
       },
     ])
+    await expect(access(join(harness.creates[0]!.cwd, '.home'))).resolves.toBeUndefined()
+    await expect(access(join(harness.creates[0]!.cwd, '.cache'))).resolves.toBeUndefined()
   })
 
   it('deletes a project without initializing it again and remains idempotent', async () => {

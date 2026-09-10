@@ -43,6 +43,13 @@ DATA_DIR="${DSH_DATA_DIR:-$DSH_HOME_DIR/server-data}"
 
 echo "== 1. sandbox runtime =="
 check "bubblewrap installed" 'command -v bwrap'
+check "pasta installed" 'command -v pasta'
+check "nftables installed" 'command -v nft'
+check "network wrapper installed" 'test -x /usr/local/libexec/dsh-netns-bwrap'
+check "synthetic hosts installed" 'grep -q "^127.0.0.1 localhost$" /usr/local/share/dsh/runtime-etc/hosts'
+check "synthetic NSS policy installed" 'grep -q "^hosts: files dns$" /usr/local/share/dsh/runtime-etc/nsswitch.conf'
+check "synthetic resolver installed" 'grep -q "^nameserver 192.0.2.53$" /usr/local/share/dsh/runtime-etc/resolv.conf'
+check "network wrapper blocks gateway, metadata, and private ranges" 'grep -q "169.254.0.0/16" /usr/local/libexec/dsh-netns-bwrap && grep -q "100.64.0.0/10" /usr/local/libexec/dsh-netns-bwrap && grep -q "192.0.2.0/24" /usr/local/libexec/dsh-netns-bwrap'
 check "/lib64 exists (bwrap ro-binds it unconditionally)" 'test -d /lib64'
 maxns="$(cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo unknown)"
 if [ "$maxns" = "0" ]; then
@@ -75,7 +82,7 @@ check "$PYTHON is >= 3.8 (uv refuses older)"   "$PYTHON -c 'import sys; raise Sy
 printf '  info  %s -> %s\n' "$PYTHON" "$(readlink -f "$PYTHON" 2>/dev/null)"
 printf '  info  %s\n' "$("$PYTHON" -VV 2>&1 | head -1)"
 # Bare `python3` follows the PATH of whoever started the Server. A shell with
-# conda activated resolves it into $HOME, which does not exist inside a session,
+# conda activation resolves it into the service home, which is not visible inside a session,
 # so the contract names the absolute path instead. Report the difference.
 if command -v python3 >/dev/null 2>&1; then
   bare="$(command -v python3)"
@@ -115,7 +122,7 @@ if [ -x /usr/local/bin/node ]; then
   done
 else
   warn "/usr/local/bin/node absent — agents cannot run node, npm, or pnpm in a session"
-  warn "a node under \$HOME (nvm) or /opt is invisible: the sandbox binds only /usr, /bin, /sbin, /lib*, /etc, /run"
+  warn "a node under the service home (nvm) or /opt is invisible: the sandbox binds only runtime paths and the workspace"
 fi
 
 echo "== 3. contract skill (bundled root) =="
@@ -170,12 +177,17 @@ else
 fi
 
 echo "== 5. service environment =="
-for var in PIP_CACHE_DIR UV_CACHE_DIR CONDA_PKGS_DIRS MAMBA_ROOT_PREFIX            npm_config_cache npm_config_store_dir npm_config_prefix            PNPM_HOME COREPACK_HOME YARN_CACHE_FOLDER NPM_CONFIG_CACHE; do
-  if [ -n "${!var:-}" ]; then
-    bad "$var=${!var} is forwarded into the sandbox, where that host path does not exist"
-  fi
-done
-[ "$FAILURES" -eq 0 ] && ok "no host cache paths exported into the sandbox"
+composition="$(dsh server --dump-config 2>/dev/null || true)"
+if printf '%s' "$composition" | grep -q 'inheritParentEnv: false'; then
+  ok "cloud subprocess disables ambient inheritance"
+else
+  bad "cloud subprocess must set inheritParentEnv: false"
+fi
+if printf '%s' "$composition" | grep -q -- '/usr/local/libexec/dsh-netns-bwrap'; then
+  ok "sandbox uses the pasta network runner"
+else
+  bad "sandbox must use /usr/local/libexec/dsh-netns-bwrap"
+fi
 check "data directory exists ($DATA_DIR)" "test -d '$DATA_DIR'"
 if [ -d "$DATA_DIR" ]; then
   printf '  info  %s owner=%s mode=%s\n' "$DATA_DIR" \
@@ -186,22 +198,48 @@ if [ "$PROBE" -eq 1 ]; then
   echo "== 6. strict namespace probe =="
   WS="${WS_ARG:-$(mktemp -d)}"
   [ -n "$WS_ARG" ] || trap 'rm -rf "$WS"' EXIT
+  mkdir -p "$WS/.home" "$WS/.cache"
+  HOST_NET_NS="$(readlink /proc/self/ns/net)"
   # Mirrors bwrapProfileArgs(policy, strictFilesystem = true) for workspace-write.
-  bwrap \
+  env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$WS/.home" \
+  pasta --foreground --quiet --config-net --no-map-gw \
+    --dns-forward 192.0.2.53 --tcp-ports none --udp-ports none -- \
+  /usr/local/libexec/dsh-netns-bwrap \
     --tmpfs / \
     --ro-bind /usr /usr \
     --ro-bind /bin /bin \
     --ro-bind /sbin /sbin \
     --ro-bind /lib /lib \
     --ro-bind /lib64 /lib64 \
-    --ro-bind /etc /etc \
-    --ro-bind /run /run \
-    --dev /dev --unshare-pid --proc /proc --die-with-parent \
+    --dir /etc \
+    --ro-bind-try /etc/alternatives /etc/alternatives \
+    --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
+    --ro-bind-try /etc/crypto-policies /etc/crypto-policies \
+    --ro-bind-try /etc/gai.conf /etc/gai.conf \
+    --ro-bind-try /etc/ld.so.cache /etc/ld.so.cache \
+    --ro-bind-try /etc/ld.so.conf /etc/ld.so.conf \
+    --ro-bind-try /etc/ld.so.conf.d /etc/ld.so.conf.d \
+    --ro-bind-try /etc/localtime /etc/localtime \
+    --ro-bind-try /etc/mime.types /etc/mime.types \
+    --ro-bind-try /etc/os-release /etc/os-release \
+    --ro-bind-try /etc/pki /etc/pki \
+    --ro-bind-try /etc/pip.conf /etc/pip.conf \
+    --ro-bind-try /etc/protocols /etc/protocols \
+    --ro-bind-try /etc/services /etc/services \
+    --ro-bind-try /etc/ssl /etc/ssl \
+    --ro-bind-try /etc/timezone /etc/timezone \
+    --ro-bind-try /etc/uv /etc/uv \
+    --ro-bind-try /usr/local/share/dsh/runtime-etc/hosts /etc/hosts \
+    --ro-bind-try /usr/local/share/dsh/runtime-etc/nsswitch.conf /etc/nsswitch.conf \
+    --ro-bind-try /usr/local/share/dsh/runtime-etc/resolv.conf /etc/resolv.conf \
+    --dev /dev --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup \
+    --proc /proc --cap-drop ALL --die-with-parent \
     --ro-bind "$WS" "$WS" \
     --tmpfs /tmp \
     --bind "$WS" "$WS" \
     --remount-ro / \
     --setenv PROBE_WS "$WS" \
+    --setenv HOST_NET_NS "$HOST_NET_NS" \
     -- bash -c '
       fail=0
       p_ok()  { printf "  ok    %s\n" "$1"; }
@@ -215,11 +253,20 @@ if [ "$PROBE" -eq 1 ]; then
       t "/tmp writable (per-call tmpfs)"    "touch /tmp/.probe && rm -f /tmp/.probe"
       t "/usr/local rejects writes"         "! touch /usr/local/.probe"
       t "/etc rejects writes"               "! touch /etc/.probe"
-      t "\$HOME is absent"                  "[ -z \"${HOME:-}\" ] || [ ! -d \"$HOME\" ]"
+      t "workspace HOME is writable"        "[ \"$HOME\" = \"$PROBE_WS/.home\" ] && touch \"$HOME/.probe\" && rm -f \"$HOME/.probe\""
       t "/opt is absent"                    "[ ! -e /opt ]"
       t "/srv is absent"                    "[ ! -e /srv ]"
       t "/var is absent"                    "[ ! -e /var/lib ]"
-      t "network reachable"                 "/usr/local/bin/python3 -c \"import urllib.request as u; u.urlopen(\\\"https://pypi.org/simple/\\\", timeout=8)\""
+      t "/run is absent"                    "[ ! -e /run ]"
+      t "host account database is absent"   "[ ! -e /etc/passwd ]"
+      t "host Git config is absent"         "[ ! -e /etc/gitconfig ]"
+      t "host npm config is absent"         "[ ! -e /etc/npmrc ]"
+      t "Linux capabilities are dropped"    "grep -q '^CapEff:[[:space:]]*0000000000000000$' /proc/self/status"
+      t "network namespace is private"      "[ \"$(readlink /proc/self/ns/net)\" != \"$HOST_NET_NS\" ]"
+      t "public package index is reachable" "/usr/local/bin/python3 -c \"import urllib.request as u; u.urlopen(\\\"https://pypi.org/simple/\\\", timeout=8)\""
+      t "cloud metadata is blocked"         "! /usr/local/bin/python3 -c \"import socket; socket.create_connection((\\\"169.254.169.254\\\", 80), 2)\""
+      t "private network is blocked"        "! /usr/local/bin/python3 -c \"import socket; socket.create_connection((\\\"10.0.0.1\\\", 80), 2)\""
+      t "Server loopback is unreachable"    "! /usr/local/bin/python3 -c \"import socket; socket.create_connection((\\\"127.0.0.1\\\", 3080), 2)\""
       exit $fail
     ' || FAILURES=$((FAILURES + 1))
 fi

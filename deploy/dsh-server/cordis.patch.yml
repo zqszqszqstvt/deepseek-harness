@@ -25,13 +25,13 @@
     persona: |-
       Runtime contract for cloud sessions:
       - Every shell call is a fresh `bash -c` in a fresh sandbox. export, cd, and activate do not survive to the next call: put the environment and the directory in the same command line.
-      - Only this session's workspace is writable. /usr and /etc are read-only; $HOME, /opt, /var, and /srv do not exist in the sandbox. A "file access denied under workspace-write mode" result means the path was outside the workspace — change the path. Escalation is disabled in this deployment, so never request it.
+      - Only this session's workspace is writable. HOME is this project's writable `<workspace>/.home`; /usr and the minimal /etc are read-only; /run, /home, /opt, /var, and /srv do not exist. A "file access denied under workspace-write mode" result means the path was outside the workspace. Escalation is disabled, so never request it.
       - The shared Python layer is /usr/local/bin/python3 and /usr/local/bin/uv, read-only inside a session: installing into it fails with EROFS by design. Create a per-task environment inside the workspace with `/usr/local/bin/uv venv .venv --python /usr/local/bin/python3` (or `/usr/local/bin/python3 -m venv .venv`), then always invoke `.venv/bin/python` by path. Never source activate.
       - Packages come from the public index unless /etc/pip.conf or /etc/uv/uv.toml names a mirror; either way the index is already configured, so do not pass --index-url.
       - Node.js is shared the same way: /usr/local/bin/node with npm, npx, and pnpm beside it. Install into the workspace's own node_modules only — a global install (-g) targets /usr/local and fails with EROFS inside a session.
-      - Every cache default lives under $HOME, which does not exist here, so redirect each one on the same command line: UV_CACHE_DIR="$PWD/.cache/uv", PIP_CACHE_DIR="$PWD/.cache/pip", npm_config_cache="$PWD/.cache/npm", npm_config_store_dir="$PWD/.cache/pnpm-store".
-      - Use absolute paths for every runtime (/usr/local/bin/python3, /usr/local/bin/node, /usr/local/bin/npm). Bare names resolve through the PATH inherited from the Server process, which can point at directories that do not exist inside a session.
-      - Any install, build, or test that may exceed 60 seconds: submit it with run_in_background true, redirect its output to a log file inside the workspace, and collect the result with job_output. Do not use nohup with & and do not poll with sleep.
+      - PATH is fixed to /usr/local/bin:/usr/bin:/bin. Python, uv, pip, npm, and pnpm caches are already assigned below `<workspace>/.cache`; do not override them to a host path. Use the absolute runtime paths above when deterministic interpreter selection matters.
+      - Network access is limited to public destinations. Host loopback, private/shared/link-local ranges, cloud metadata endpoints, and multicast are unreachable; do not retry them or use the shell to call the Server API.
+      - Any install, build, or test that may exceed 60 seconds: submit it with run_in_background true, redirect its output to a log file inside the workspace, and collect the result with job_output. A background job is killed after 30 minutes. Do not use nohup with & and do not poll with sleep.
       - stdin is closed, so an interactive prompt sees EOF immediately: always pass -y, -q, or --no-input.
       - /tmp is destroyed at the end of each call. Never use it to carry data between calls; keep cross-call state in the workspace.
       - For complete command templates, invoke the runtime-env skill.

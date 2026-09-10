@@ -13,11 +13,11 @@
 # keeps a .venv self-contained inside the user's workspace.
 link-mode = "copy"
 
-# The image's interpreter is the only one. Downloading another would need a
-# writable $HOME, which does not exist inside the sandbox, so the attempt would
-# burn a call and fail.
+# The shared runtime's interpreter is the only one. Project commands do receive
+# a writable project-local HOME, but downloading another interpreter would
+# duplicate the runtime and weaken version control across projects.
 python-downloads = "never"
 
-# Deliberately NOT set here: cache-dir. The cache must be per-call and inside the
-# workspace (UV_CACHE_DIR="$PWD/.cache/uv"), because no host path written here
-# exists inside the namespace.
+# Deliberately NOT set here: cache-dir. The Server injects a project-local
+# UV_CACHE_DIR under <workspace>/.cache, so no host-global writable cache is
+# shared across projects.

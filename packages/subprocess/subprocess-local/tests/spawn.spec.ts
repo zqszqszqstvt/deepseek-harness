@@ -879,6 +879,16 @@ describe('coverage seams', () => {
     }
   })
 
+  it('childEnv can start from an empty base for an isolated deployment', () => {
+    const name = 'DSH_AMBIENT_ENV_MUST_NOT_SURVIVE'
+    process.env[name] = 'secret'
+    try {
+      expect(childEnv({ PATH: '/usr/bin' }, false)).toEqual({ PATH: '/usr/bin' })
+    } finally {
+      Reflect.deleteProperty(process.env, name)
+    }
+  })
+
   it('settles through the pipe-drain timer when a descendant holds a collected pipe', async () => {
     // The leader spawns a detached grandchild inheriting the collected stdout
     // pipe, then exits: `close` cannot settle while the grandchild holds the

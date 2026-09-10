@@ -8,6 +8,32 @@ import { grantArgs as landlockGrantArgs } from '@deepseek-ai/node-addon-landlock
 import { writableRoots } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 
+/** Runtime configuration paths permitted in the strict profile's synthetic `/etc`. */
+const STRICT_ETC_BINDS = [
+  '/etc/alternatives',
+  '/etc/ca-certificates',
+  '/etc/crypto-policies',
+  '/etc/gai.conf',
+  '/etc/ld.so.cache',
+  '/etc/ld.so.conf',
+  '/etc/ld.so.conf.d',
+  '/etc/localtime',
+  '/etc/mime.types',
+  '/etc/os-release',
+  '/etc/pki',
+  '/etc/pip.conf',
+  '/etc/protocols',
+  '/etc/services',
+  '/etc/ssl',
+  '/etc/timezone',
+  '/etc/uv',
+] as const
+
+/** Build optional read-only binds into the strict profile's synthetic `/etc`. */
+function strictEtcArgs(): string[] {
+  return STRICT_ETC_BINDS.flatMap(path => ['--ro-bind-try', path, path])
+}
+
 /**
  * Build the bwrap profile arguments for one file-effect policy.
  * @param policy - file-effect policy to express as bwrap mounts.
@@ -26,9 +52,15 @@ export function bwrapProfileArgs(policy: SandboxPolicy, strictFilesystem = false
       '--ro-bind', '/sbin', '/sbin',
       '--ro-bind', '/lib', '/lib',
       '--ro-bind', '/lib64', '/lib64',
-      '--ro-bind', '/etc', '/etc',
-      '--ro-bind', '/run', '/run',
-      '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent',
+      '--dir', '/etc',
+      ...strictEtcArgs(),
+      // The deployment kit installs a resolver file whose synthetic address
+      // pasta forwards to the host resolver without exposing host loopback.
+      '--ro-bind-try', '/usr/local/share/dsh/runtime-etc/hosts', '/etc/hosts',
+      '--ro-bind-try', '/usr/local/share/dsh/runtime-etc/nsswitch.conf', '/etc/nsswitch.conf',
+      '--ro-bind-try', '/usr/local/share/dsh/runtime-etc/resolv.conf', '/etc/resolv.conf',
+      '--dev', '/dev', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup',
+      '--proc', '/proc', '--cap-drop', 'ALL', '--die-with-parent',
       '--ro-bind', policy.workspaceRoot, policy.workspaceRoot,
     ]
     : ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']

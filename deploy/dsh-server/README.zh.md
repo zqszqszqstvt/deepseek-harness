@@ -2,137 +2,182 @@
 
 [English](README.md) | 中文
 
-本目录是让 Python 在多用户 [`dsh server`](../../packages/bundle/server/README.zh.md) 部署里既可用又互相隔离的部署套件。它**不需要修改 harness 代码**：镜像提供只读共享工具链，部署层 patch 提供常驻契约，bundled skill 提供按需命令模板。隔离论证只有一句——共享层对所有人只读，唯一可写的地方是本次调用会话自己的工作区，而 strict bubblewrap 每次调用只绑定这一个工作区。两条安装路径产生完全相同的布局：在既有 Linux 宿主（apt、dnf 或 yum）上用 [`install-host.sh`](install-host.sh)，或在容器化部署时用 [`Dockerfile`](Dockerfile)。本套件不要求使用容器。
+本目录用于在多用户 `dsh server` 主机上准备一套只读共享 Python/Node 运行时，并为每个项目工作区提供独立可写依赖层。生产环境推荐使用独立 Linux 云主机加 systemd。部署会让每条模型 shell 命令进入独立网络 namespace，只暴露最小 `/etc`，用固定命令环境取代 Server 进程继承环境，并在 30 分钟后终止云端后台任务。本次有意暂缓上游身份强制、CPU/内存/进程/磁盘限制，以及相同项目依赖的物理去重。
 
-## 目录契约
+## 最终目录布局
 
-agent 需要触达的每个路径都必须位于 strict profile 会绑定的前缀之下：`/usr`、`/bin`、`/sbin`、`/lib`、`/lib64`、`/etc`、`/run`，加上该会话的工作区（[`profiles.ts:19-45`](../../packages/sandbox/sandbox-local/src/profiles.ts)）。
+| 路径 | 用途 | 云端 shell 内可见性 |
+| --- | --- | --- |
+| `/usr/local/bin/python3`、`uv`、`uvx` | 共享 Python 运行时 | 只读 |
+| `/usr/local/bin/node`、`npm`、`npx`、`pnpm` | 共享 Node.js 运行时 | 只读 |
+| `/etc/pip.conf`、`/etc/uv/uv.toml` | 不含凭据的包源策略 | 只读 |
+| `/usr/local/share/dsh/runtime-etc` | 合成的 hosts、NSS 与 pasta DNS 文件 | 挂入最小 `/etc` |
+| `/usr/local/libexec/dsh-netns-bwrap` | 先装载 nftables 策略，再启动 bwrap | 宿主侧启动器 |
+| `/usr/local/share/dsh/skills/runtime-env` | 运行时命令模板 | 作为可信 bundled skill 读取 |
+| `/var/lib/dsh` | Server 配置与凭据 | 不存在 |
+| `/var/lib/dsh/server-data` | 所有哈希化项目目录 | 只挂载当前项目工作区 |
+| `<workspace>/.home` | 项目级 `HOME` | 可写 |
+| `<workspace>/.cache` | uv、pip、npm、pnpm 缓存 | 可写 |
+| `<workspace>/.venv`、`node_modules` | 项目依赖 | 可写 |
+| `/tmp` | 单次调用临时数据 | 可写，调用结束即销毁 |
 
-| 绝对路径 | 存放内容 | 沙箱内 | 属主与权限 |
-| --- | --- | --- | --- |
-| `/usr/local/bin/python3` | 共享解释器：软链到已安装的、带 `venv` 与 `ensurepip` 且版本满足 `uv` 要求的最新解释器 | 只读 | 发行版软件包；真正的保证来自绑定挂载，而不是权限位 |
-| `/usr/local/bin/uv`、`/usr/local/bin/uvx` | 共享安装器/解析器 | 只读 | `root:root 0755` |
-| `/usr/local/bin/node`、`npm`、`npx`、`pnpm` | 共享 Node.js LTS 及其包管理器 | 只读 | `root:root`，在加锁之前安装 |
-| `/etc/pip.conf`、`/etc/uv/uv.toml` | 可选的源配置；缺失即使用公网源 | 只读 | `root:root 0644`，不含凭据 |
-| `/usr/local/share/dsh/skills/runtime-env/SKILL.md` | 面向模型的命令模板 | 不需要：宿主侧读取 | `root:root`、`a-w` |
-| `/var/lib/dsh`（`DSH_HOME`） | `cordis.patch.yml`、profile、凭据 | 不可见 | `dsh:dsh 0700` |
-| `/var/lib/dsh/server-data`（`--data-dir`） | 所有用户的工作区 | 仅本次调用会话自己的子树 | `dsh:dsh 0700` |
-| `<workspace>/.venv`、`<workspace>/.cache`、`<workspace>/.pylibs` | 该用户可写的环境 | 可读写 | 服务 uid |
-| `<workspace>/.dsh/spill` | harness 写入的截断调用完整输出 | 可读写 | 服务 uid |
-| `/opt`、`/srv`、`$HOME`、`/var/tmp` | 绝不要在这里安装 agent 工具 | **不存在** | — |
+strict 根目录只包含 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64`、合成 `/etc`、`/dev`、`/proc`、`/tmp` 和当前工作区。`/run`、`/home`、`/opt`、`/var`、`/srv`、宿主账号文件以及宿主全局 Git/npm 配置均不存在。子进程 provider 不继承 Server 环境；云端 shell 只得到固定的 `PATH=/usr/local/bin:/usr/bin:/bin`、项目 HOME、项目缓存变量、locale、`TMPDIR` 和受管理的 `DSH_*` 信息。
 
-每用户工作区路径：保留的 default 项目是 `<data-dir>/users/<sha256(userId)>/workspace`，具名项目是 `<data-dir>/users/<sha256(userId)>/projects/<sha256(projectId)>/workspace`。
+每条 shell 命令都运行在新的 pasta 网络 namespace 中，因此其中的 loopback 并非宿主 loopback，仍可供同一命令内的测试使用。nftables 允许合成 DNS 地址和公网目标，拒绝 RFC1918、共享、链路本地、云元数据、组播及保留网关网段；`--no-map-gw` 同时禁止 pasta 通过 namespace 网关映射宿主，strict bwrap profile 还会在启动模型命令前丢弃全部 capability，使其无法删除这些规则。这会关闭用户 shell 访问 Server 无认证回环 API 的路径，同时保留公网包下载能力。
 
-## 为什么是这些目录
+## 云主机前置要求
 
-布局由三个机制决定，每个机制都有一种"看起来像 bug、其实是契约"的失败形态。
+使用独立 VM，不要与交互式业务共用宿主。支持 apt、dnf 和 yum；建议使用带 systemd 的当前 x86-64 或 arm64 发行版，目标系列为 Ubuntu 22.04/24.04、Debian 12、RHEL/Rocky/Alma 9、Fedora 和当前 Amazon Linux。主机需要：
 
-- **要么可见，要么不存在。** strict profile 从空根开始（`--tmpfs /` 再 `--remount-ro /`），所以放在 `/opt/conda` 或服务用户 home 下的工具链不只是被禁止——它根本不存在，引用它的命令会以 ENOENT 失败。这就是解释器与 `uv` 必须进 `/usr/local`、镜像源必须进 `/etc` 的原因。
-- **共享只读，用户可写。** 让共享层敢于暴露的是挂载而不是权限位：strict profile 对 `/usr` 做 ro-bind，所以在会话内每个用户往系统 site-packages 里 `pip install`、往 base 里 `conda install` 都会得到 EROFS，谁都改不了别人 agent 会 import 的东西。宿主侧的加锁属于纵深防御，而且必须收窄，因为对整个 `/usr/local` 做 `chmod -R a-w` 会在那些连 root 都拒绝的厂商目录上中断——`/usr/local/aegis` 下的阿里云云盾就是一例——所以 `install-host.sh` 只锁它自己装的文件，并把 `--lock-all` 与 `--no-lock` 作为显式选项。每个会话的包住在自己工作区的 `.venv` 里，而 strict bubblewrap 每次调用只绑定一个工作区，所以用户 A 既读不到也写不到用户 B 的环境。Node.js 以同样的条件、同样的理由加入共享层：住在 `$HOME`（nvm 的默认位置）或 `/opt` 下的运行时在每个会话里都不可见，所以安装器把 node、npm、npx、pnpm 放进 `/usr/local`。这样 `npm install -g` 的目标就是 `/usr/local`，在会话内得到 EROFS；而每个包管理器的缓存默认值（`~/.npm`、`~/.local/share/pnpm`、`~/.cache/pip`、`~/.cache/uv`）都指向一个并不存在的 `$HOME`，这正是契约要求在同一条命令里把每个缓存重定向进工作区的原因。
-- **宿主侧根目录是投递指令的唯一途径。** Server 会话把进程内读取围栏限定在工作区（`fs-sandbox` + `strictReads`），这会静默废掉 CLI 或桌面部署惯用的两个位置：`$DSH_HOME/AGENTS.md` 经 `ctx.fs` 探测后返回 unavailable，被直接跳过且没有任何诊断；`$DSH_HOME/skills` 与 `$DSH_AGENTS_HOME/skills` 被当作不存在，因为 skill provider 把 `FS_SANDBOX_DENIED` 映射成路径缺失。bundled skill 根是例外——它用宿主文件系统调用加载并被标记为可信——这正是 `DSH_BUNDLED_SKILL_DIR` 暴露的东西。常驻文案改走 `system-prompt.persona`，base 组合刻意把这一行留给部署填写。
+- root 或 sudo 安装权限；
+- 已按你的发布流程安装、可正常执行的 `dsh`；
+- 安装期间允许出站 HTTPS 访问模型端点、`nodejs.org`、`astral.sh` 和配置的 Python/npm 仓库；
+- 沙箱安装依赖时可使用 DNS 和普通公网出口；
+- `/var/lib/dsh/server-data` 使用持久化文件系统；
+- 3080 不对公网监听：Server 保持在 `127.0.0.1`，只允许可信后端调用。
 
-## 在 Linux 宿主上安装
-
-当 `dsh server` 已经跑在虚拟机或裸机上时走这条路径——它更短，因为 bubblewrap 此时不需要任何额外的容器特权。脚本是幂等的，会自动识别包管理器（Debian/Ubuntu 用 apt，RHEL、Rocky、Alma、Fedora、Amazon Linux 用 dnf 或 yum），安装与镜像相同的目录布局，写出 systemd unit，并在无法提供解释器时以明确错误停下。Node.js LTS 会被取到 `/usr/local` 并在旁边装上 pnpm；`--node-version 24.19.0`、`--no-node`、`--no-pnpm`、`--pnpm-version` 可以改变这一行为。用 sudo 运行安装器：它调用 `npm` 与 `pnpm` 时会显式把 `/usr/local/bin` 放进 PATH，因为 sudo 的 `secure_path` 不含该目录，否则它们的 `#!/usr/bin/env node` shebang 会失败。脚本最后打印一份契约清单，任何契约路径缺失都会让本次运行以失败结束，因此装了一半的状态不会被当成可用。
+安装前记录环境：
 
 ```bash
-sudo ./install-host.sh --data-dir /var/lib/dsh/server-data
-sudo systemctl edit dsh-server      # Environment=DEEPSEEK_API_KEY=... (or a drop-in)
+uname -a
+cat /etc/os-release
+command -v dsh && dsh --version
+df -h /var/lib/dsh 2>/dev/null || df -h /
+systemctl --version | head -1
+```
+
+如果没有安装 `dsh`，先安装你要运行的固定版本。宿主安装器只准备运行时，不替你选择或升级 Server 版本。安装 `dsh` 后应再次运行安装器，让生成的 unit 记录真实可执行文件路径。
+
+## 启用非特权 namespace
+
+pasta 与 bubblewrap 都依赖非特权 user namespace。先检查：
+
+```bash
+sysctl user.max_user_namespaces
+unshare --user --map-root-user true
+```
+
+若独立 VM 上该值为零，持久化一个非零值并重新加载：
+
+```bash
+sudo install -d -m 0755 /etc/sysctl.d
+printf '%s\n' 'user.max_user_namespaces=15000' | sudo tee /etc/sysctl.d/90-dsh-userns.conf
+sudo sysctl --system
+```
+
+Ubuntu 24.04 还可能设置 `kernel.apparmor_restrict_unprivileged_userns=1`。优先编写并审核只允许确切 dsh、pasta、bubblewrap 执行路径创建 user namespace 的 AppArmor 策略。在独立 VM 上，把该 sysctl 设为 `0` 是兼容性后备方案，但它会削弱整台主机的 AppArmor 限制，不适合共享宿主。
+
+在 SELinux 系统上保持 Enforcing。namespace 探针失败时查看 `ausearch -m AVC -ts recent`，针对被拒的 pasta/bwrap 操作制作并审核最小 policy module，再重新执行探针。`setenforce 0` 只能用于短时对比诊断，不能成为部署状态。
+
+## 安装宿主运行时
+
+在当前版本的部署目录运行：
+
+```bash
+cd /path/to/deepseek-harness/deploy/dsh-server
+sudo ./install-host.sh \
+  --dsh-home /var/lib/dsh \
+  --data-dir /var/lib/dsh/server-data
+```
+
+脚本会安装 `bubblewrap`、提供 `pasta` 的 `passt`、`nftables`、Python、uv、Node.js、合成 `/etc` 文件、bundled skill、部署 patch、服务用户和 systemd unit。脚本可幂等重跑，任何必需程序或文件缺失都会失败。RHEL 系最小镜像可能要先按主机软件源规范启用 EPEL/CRB，发行版才能提供 `passt` 或 `bubblewrap`；启用后原样重跑安装器。
+
+常用选项包括 `--node-version 24.19.0`、`--no-node`、`--no-pnpm`、`--pnpm-version V`、`--no-systemd`、`--no-service-user`。默认只加固本套件拥有的文件。`--lock-all` 还会尝试处理整个 `/usr/local`，有厂商 agent 的宿主不要使用；`--no-lock` 会移除宿主侧纵深防御，但不会改变沙箱中的只读挂载。
+
+确认基础组件：
+
+```bash
+command -v bwrap pasta nft
+/usr/local/bin/python3 -VV
+/usr/local/bin/uv --version
+/usr/local/bin/node -v
+sudo systemctl cat dsh-server
+```
+
+## 配置服务凭据
+
+不要把凭据写进 unit 或仓库。可以让 systemd drop-in 读取 root-only 环境文件：
+
+```bash
+sudo install -d -m 0755 /etc/systemd/system/dsh-server.service.d
+sudo install -m 0600 -o root -g root /dev/null /etc/dsh-server.env
+sudoedit /etc/dsh-server.env
+```
+
+文件中写 systemd 环境赋值，不写 `export`，例如 `DEEPSEEK_API_KEY=...`。然后创建 `/etc/systemd/system/dsh-server.service.d/10-credentials.conf`：
+
+```ini
+[Service]
+EnvironmentFile=/etc/dsh-server.env
+```
+
+命令沙箱不会继承这份环境。凭据形态名称还会额外经过清除，但主要控制是环境隔离，不是变量名启发式规则。
+
+## 启动与验证
+
+```bash
+sudo systemctl daemon-reload
 sudo systemctl enable --now dsh-server
-./verify.sh --bwrap-probe
+sudo systemctl status dsh-server --no-pager
+curl -fsS http://127.0.0.1:3080/healthz
 ```
 
-宿主必须开启非特权 user namespace：`user.max_user_namespaces` 不为 0，Ubuntu 24.04 还需要 `kernel.apparmor_restrict_unprivileged_userns=0`。unit 正是因此不添加任何 capability——如果宿主的 bubblewrap 是 setuid 二进制，则改为从 unit 里去掉 `NoNewPrivileges`。在 SELinux 为 `Enforcing` 的宿主上，探针失败通常是策略而不是套件的问题：先用 `setenforce 0` 确认，然后保留一个策略模块而不是把宿主长期停在 permissive。只有当宿主把可写工具放在 `/usr/local` 下时才传 `--no-lock`，并接受“agent 能修改其他 agent 会 import 的东西”这个后果。
-
-当 Server 是手工启动而不是由 systemd 托管时——例如在仓库检出目录里跑 `pnpm dsh server`——跳过服务用户，把契约拷进运行用户自己的 `$DSH_HOME`：
+以服务用户运行部署检查，使 HOME、`DSH_HOME`、数据目录权限、配置加载和非特权 namespace 与生产一致：
 
 ```bash
-sudo ./install-host.sh --no-systemd --no-service-user
-install -m 0600 cordis.patch.yml "${DSH_HOME:-$HOME/.dsh}/cordis.patch.yml"
-export DSH_BUNDLED_SKILL_DIR=/usr/local/share/dsh/skills UV_PYTHON_DOWNLOADS=never
-pnpm dsh server --host 127.0.0.1 --port 3080
+cd /path/to/deepseek-harness/deploy/dsh-server
+sudo -u dsh -H env \
+  DSH_HOME=/var/lib/dsh \
+  DSH_DATA_DIR=/var/lib/dsh/server-data \
+  ./verify.sh --bwrap-probe
 ```
 
-此时数据目录默认为 `<DSH_HOME>/server-data`，所以每个用户的工作区是 `<DSH_HOME>/server-data/users/<sha256(userId)>/workspace`。
+最后一行必须是 `verify.sh: all checks passed`。探针必须显示公网包源可达，同时拒绝私网、云元数据和 Server loopback；还必须显示不同的网络 namespace、可写项目 HOME、不存在的 `/run` 以及最小 `/etc`。出现 `pasta:`、`dsh-netns-bwrap:` 或 `bwrap:` 失败意味着执行会 fail closed；修复前不要接入流量。
 
-## 构建镜像
+基础探针通过后，对在线服务执行 [`ACCEPTANCE.md`](ACCEPTANCE.md)。它会创建专用测试用户，验证 Python/Node 安装、跨用户文件拒绝、环境清除、最小文件系统可见性、后台超时策略，以及模型 shell 无法访问 `127.0.0.1:3080`、私网地址或云元数据。
+
+## 包镜像源
+
+需要公共镜像时，在安装前编辑 [`pip.conf`](pip.conf) 与 [`uv.toml`](uv.toml)，然后重跑 `install-host.sh`。这些文件对所有沙箱可读，绝不能包含凭据。私有包应使用网络侧认证代理或无需凭据的内网镜像端点。npm 遵循相同规则：不要挂载带 token 的宿主 `/etc/npmrc`；项目凭据需要另行设计并审核。
+
+## 升级
+
+准备新版本并保存当前部署文件：
 
 ```bash
-cd deploy/dsh-server
-docker build -t dsh-server:py312 .
-# Offline build: replace the uv COPY stage with a local static binary, and point
-# pip.conf / uv.toml at your internal mirror before building.
+sudo cp -a /etc/systemd/system/dsh-server.service /etc/systemd/system/dsh-server.service.pre-upgrade
+sudo cp -a /var/lib/dsh/cordis.patch.yml /var/lib/dsh/cordis.patch.yml.pre-upgrade
+sudo cp -a /usr/local/libexec/dsh-netns-bwrap /usr/local/libexec/dsh-netns-bwrap.pre-upgrade
 ```
 
-## 运行容器
-
-容器路径是可选的；如果 Server 已经跑在宿主上，直接跳到下面的“在 Linux 宿主上安装”一节。bubblewrap 需要在容器内创建 mount namespace。Ubuntu 24.04 宿主还要设置 `kernel.apparmor_restrict_unprivileged_userns=0`。
+安装固定的新 `dsh` 版本，从该版本重跑安装器，重启并重复两层验证：
 
 ```bash
-docker run -d --name dsh-server \
-  --cap-add SYS_ADMIN --security-opt seccomp=unconfined \
-  -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  -v dsh-data:/var/lib/dsh/server-data \
-  -p 127.0.0.1:3080:3080 \
-  dsh-server:py312
+sudo ./install-host.sh --dsh-home /var/lib/dsh --data-dir /var/lib/dsh/server-data
+sudo systemctl daemon-reload
+sudo systemctl restart dsh-server
+sudo -u dsh -H env DSH_HOME=/var/lib/dsh DSH_DATA_DIR=/var/lib/dsh/server-data ./verify.sh --bwrap-probe
 ```
 
-命名卷首次使用时会继承镜像目录的属主，因此 `/var/lib/dsh/server-data` 保持由服务 uid 拥有；改为绑定挂载宿主目录时必须先 `chown -R 10001:10001`。`DEEPSEEK_API_KEY` 永远不会出现在 agent shell 里：变量名匹配 `KEY|PASSWORD|SECRET|TOKEN` 的会被从子进程环境中丢弃。对外发布的端口要留在 loopback 或可信后端网络——Server 自身没有认证层。
+仅升级运行时时不要删除或迁移数据目录。独立的数据格式迁移应先停止流量，并遵循对应版本的迁移说明。
 
-## 准备部署层 patch
+## 回滚
 
-镜像已经把 [`cordis.patch.yml`](cordis.patch.yml) 拷到 `/var/lib/dsh/cordis.patch.yml`，`install-host.sh` 也会连同 systemd unit 一起安装它。手工裸机部署时，把它拷到服务用户的 `$DSH_HOME`：
+重新安装上一固定版本的 `dsh`，运行上一版本的 `install-host.sh`；只有安装器未复现原配置时才恢复备份 unit/patch，然后 reload 并重启 systemd。恢复流量前运行上一版本的 `verify.sh --bwrap-probe`。只切换 CLI 不算完整回滚：runner、合成 `/etc`、Cordis patch 与 service unit 必须来自同一版本。
 
-```bash
-install -d -m 0700 /var/lib/dsh
-install -m 0600 -o dsh -g dsh cordis.patch.yml /var/lib/dsh/cordis.patch.yml
-systemctl edit dsh-server   # or the unit's Environment= lines
-#   DSH_HOME=/var/lib/dsh
-#   DSH_BUNDLED_SKILL_DIR=/usr/local/share/dsh/skills
-#   UV_PYTHON_DOWNLOADS=never
-```
+## 日常运维
 
-patch 行会替换目标行的**整段** config，而 persona 是严格模板：文案里出现字面量 `{{` 会在提示词装配时抛错。
+本次暂缓的容量控制仍由部署负责。[`workspace-gc.sh`](workspace-gc.sh) 默认只做 dry-run，只清理 `.cache` 与 `.dsh/spill`，绝不删除 `.venv`、`node_modules`、`.pylibs` 或用户文件。容量限制变得紧急时，应在数据卷上使用文件系统配额。
 
-## 配额与保留期
+服务错误使用 `journalctl -u dsh-server -n 200 --no-pager` 查看。重复出现 runner 签名表示 namespace 或 nftables 初始化失败，不是包安装失败。DNS 成功但公网源失败，通常表示 VM 出口策略阻断了 pasta 转换后的流量。
 
-Server 对工作区内容既不设磁盘配额也不做保留期清理。部署层用两件事覆盖：
+## 容器状态
 
-```bash
-# 1. Retention for the two harness-owned artifact trees (.cache, .dsh/spill).
-#    Dry run by default; never deletes .venv, .pylibs, or user files.
-./workspace-gc.sh --data-dir /var/lib/dsh/server-data --older-than-days 14
-./workspace-gc.sh --data-dir /var/lib/dsh/server-data --older-than-days 14 --apply
-
-# 2. Capacity: a filesystem quota on the data volume, because per-user .venv and
-#    .cache growth is user work, not garbage. XFS project quotas map cleanly onto
-#    users/<sha256(userId)>; ext4 needs a per-user mount or a single volume cap.
-xfs_quota -x -c 'limit -p bhard=20g <project-id>' /var/lib/dsh/server-data
-
-# cron: prune nightly, report weekly
-0 3 * * * /opt/dsh-deploy/workspace-gc.sh --data-dir /var/lib/dsh/server-data --apply >> /var/log/dsh-gc.log 2>&1
-```
-
-## 验收
-
-```bash
-./verify.sh                                  # host-side: paths, modes, traps, patch
-./verify.sh --bwrap-probe                    # also assert what an agent sees in the namespace
-./verify.sh --bwrap-probe /var/lib/dsh/server-data/users/<sha>/workspace
-```
-
-宿主检查之后，[`ACCEPTANCE.md`](ACCEPTANCE.md) 是针对活跃 Server 的端到端验收手册：七轮验证，证明 Python 与 Node 环境可用且只属于各自用户、第二个用户读不到第一个用户的文件、超大命令输出可以从模型能打开的路径恢复、越权 `workdir` 在任何 spawn 之前被拒、以及共享层、`$HOME`、`/opt`、`/tmp` 的行为与契约所述一致。每项判定都是机械的——[`show-history.py`](show-history.py) 的退出码、一个文件测试、或一个精确字符串——因此这份手册既可以由运维执行，也可以交给 AI 执行。`verify.sh` 里命名空间内的断言复刻 [`profiles.ts`](../../packages/sandbox/sandbox-local/src/profiles.ts)；那个文件改了，这个探针也要跟着改。
-
-## 已知空档
-
-- 没有产品级配额、GC 或保留期：两者今天都是部署职责，而 `.venv` 的增长只能靠文件系统配额控制。
-- 没有 workspace seeding：新项目工作区是空目录，Server 也不暴露文件系统 HTTP 路由，所以项目级文件只能来自 bundled skill 根、persona，或宿主侧脚本。
-- `read-only` 会话仍会把产物写到宿主私有临时目录，因为该模式承诺不写工作区。Server 把会话封顶在 `workspace-write`，所以今天走不到这条路径。
-- `/tmp` 仍有三种语义（shell 里是每次调用即焚的 tmpfs、写围栏里是宿主 `/tmp`、读围栏里被拒）。本套件不消除它，而是用 persona 与 skill 告诉模型不要依赖它。
-- 本地（Electron）执行环境没有后台任务、输出合计上限约 128KB、传输硬超时 120 秒。skill 的本地分支通过拆分安装步骤在这些限制内工作；本套件不含协议改动。
+[`Dockerfile`](Dockerfile) 仍作为可复现目录布局和镜像构建参考，但仓库没有提供生产支持的嵌套容器启动方式。容器内必须同时正确运行 pasta、nftables、非特权 user namespace 与 bubblewrap，而且不能通过宽泛 capability 暴露宿主。不要把 `--cap-add SYS_ADMIN` 加 `seccomp=unconfined` 当成可接受的生产替代方案。除非你的容器平台已有审核过的 namespace 配置，并通过完整 namespace 探针和在线验收手册，否则使用 VM/systemd 路径。
 
 ## 相关文档
 
-- [`@deepseek-ai/dsh-server` README](../../packages/bundle/server/README.zh.md) — 部署契约、HTTP 路由、模型体验
-- [多用户 Server 子系统](../../docs/subsystems/server.zh.md) — 信任边界与 Cordis API
-- [`sandbox-local` profiles](../../packages/sandbox/sandbox-local/src/profiles.ts) — 权威的挂载清单
+- [`@deepseek-ai/dsh-server` README](../../packages/bundle/server/README.zh.md)
+- [`sandbox-local` README](../../packages/sandbox/sandbox-local/README.zh.md)
+- [`subprocess-local` README](../../packages/subprocess/subprocess-local/README.zh.md)
+- [Server 子系统](../../docs/subsystems/server.zh.md)

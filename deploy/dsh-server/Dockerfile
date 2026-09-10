@@ -3,9 +3,9 @@
 # dsh server cloud image: Python 3.12 + uv + the model-facing runtime contract.
 #
 # Directory contract. Strict bubblewrap starts from an empty root and ro-binds
-# ONLY /usr /bin /sbin /lib /lib64 /etc /run, plus the calling session's own
-# workspace (packages/sandbox/sandbox-local/src/profiles.ts:19-45). Everything an
-# agent must use therefore has to live under one of those prefixes:
+# ONLY the runtime directories, a synthetic /etc, and the calling session's own
+# workspace (packages/sandbox/sandbox-local/src/profiles.ts). Everything an
+# agent must use therefore has to live under one of the bound prefixes:
 #
 #   /usr/local/bin/python3        shared interpreter (read-only)
 #   /usr/local/bin/uv, /usr/local/bin/uvx   shared installer (read-only)
@@ -17,7 +17,7 @@
 #   /var/lib/dsh/server-data      --data-dir. Only the calling session's own
 #                                 workspace subtree is bound into its namespace.
 #
-# Never install agent-visible tooling under /opt, /srv, /var/tmp, or any $HOME:
+# Never install shared agent tooling under /opt, /srv, /var/tmp, or the service home:
 # those paths do not exist inside the namespace.
 
 FROM python:3.12-slim-bookworm
@@ -25,7 +25,7 @@ FROM python:3.12-slim-bookworm
 # ① Runtime dependencies. bubblewrap is mandatory: without it every shell call
 #    fails closed with SANDBOX_UNAVAILABLE.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bubblewrap ca-certificates curl git xz-utils \
+ && apt-get install -y --no-install-recommends bubblewrap ca-certificates curl git nftables passt xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # ② sandbox-local passes `--ro-bind /lib64 /lib64` unconditionally, and bwrap
@@ -62,6 +62,13 @@ RUN chmod 0644 /etc/pip.conf /etc/uv/uv.toml
 #    silently skipped under strictReads.
 COPY skills /usr/local/share/dsh/skills
 
+# The configured sandbox runner creates an unprivileged network namespace,
+# installs its egress policy, and then enters the bwrap filesystem sandbox.
+COPY dsh-netns-bwrap /usr/local/libexec/dsh-netns-bwrap
+COPY hosts nsswitch.conf resolv.conf /usr/local/share/dsh/runtime-etc/
+RUN chmod 0755 /usr/local/libexec/dsh-netns-bwrap \
+ && chmod 0644 /usr/local/share/dsh/runtime-etc/*
+
 # ⑦ Lock the shared layer read-only. A user writing to /usr/local or /etc must
 #    get EROFS; per-user installs belong in that user's workspace .venv.
 RUN chown -R root:root /usr/local /usr/local/share/dsh \
@@ -79,12 +86,11 @@ RUN chown dsh:dsh /var/lib/dsh/cordis.patch.yml && chmod 0600 /var/lib/dsh/cordi
 ENV DSH_HOME=/var/lib/dsh
 # skill-filesystem defaults bundledSkillDir to $DSH_BUNDLED_SKILL_DIR.
 ENV DSH_BUNDLED_SKILL_DIR=/usr/local/share/dsh/skills
-# There is no $HOME inside the sandbox, so uv must never try to fetch an
-# interpreter: the baked /usr/local/bin/python3 is the only one.
+# The project HOME is writable, but uv must never fetch another interpreter:
+# the baked /usr/local/bin/python3 is the only shared runtime.
 ENV UV_PYTHON_DOWNLOADS=never
-# Do NOT set PIP_CACHE_DIR / UV_CACHE_DIR / CONDA_PKGS_DIRS here. The server
-# environment is forwarded into the sandbox, and a host cache path does not exist
-# there. Each command points its cache into the workspace ($PWD/.cache/...).
+# The cloud subprocess provider does not inherit this image environment. The
+# Server shell injects its fixed PATH, project HOME, and project cache paths.
 
 USER dsh
 WORKDIR /var/lib/dsh
