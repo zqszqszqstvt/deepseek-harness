@@ -121,7 +121,7 @@ xfs_quota -x -c 'limit -p bhard=20g <project-id>' /var/lib/dsh/server-data
 ./verify.sh --bwrap-probe /var/lib/dsh/server-data/users/<sha>/workspace
 ```
 
-然后对一个活跃会话发一轮端到端回合：让 agent 列出自己的 skills、建 `.venv`、后台装一个包、再做三重验证。期望结果由 `verify.sh` 第 7 节打印。命名空间内的断言复刻 [`profiles.ts`](../../packages/sandbox/sandbox-local/src/profiles.ts)；那个文件改了，这个探针也要跟着改。
+宿主检查之后，[`ACCEPTANCE.md`](ACCEPTANCE.md) 是针对活跃 Server 的端到端验收手册：七轮验证，证明 Python 与 Node 环境可用且只属于各自用户、第二个用户读不到第一个用户的文件、超大命令输出可以从模型能打开的路径恢复、越权 `workdir` 在任何 spawn 之前被拒、以及共享层、`$HOME`、`/opt`、`/tmp` 的行为与契约所述一致。每项判定都是机械的——[`show-history.py`](show-history.py) 的退出码、一个文件测试、或一个精确字符串——因此这份手册既可以由运维执行，也可以交给 AI 执行。`verify.sh` 里命名空间内的断言复刻 [`profiles.ts`](../../packages/sandbox/sandbox-local/src/profiles.ts)；那个文件改了，这个探针也要跟着改。
 
 ## 已知空档
 

@@ -121,7 +121,7 @@ xfs_quota -x -c 'limit -p bhard=20g <project-id>' /var/lib/dsh/server-data
 ./verify.sh --bwrap-probe /var/lib/dsh/server-data/users/<sha>/workspace
 ```
 
-Then one end-to-end turn against a live session: ask the agent to list its skills, build `.venv`, install a package in the background, and run the three-step verification. The expected results are printed by `verify.sh` section 7. The in-namespace assertions replicate [`profiles.ts`](../../packages/sandbox/sandbox-local/src/profiles.ts); if that file changes, the probe must change with it.
+After the host checks, [`ACCEPTANCE.md`](ACCEPTANCE.md) is the end-to-end runbook against a live Server: seven turns proving that the Python and Node environments are usable and stay per-user, that a second user is denied the first user's files, that an oversized command output is recoverable from a path the model can open, that an escaping `workdir` is refused before any spawn, and that the shared layer, `$HOME`, `/opt`, and `/tmp` behave as the contract states. Every check is mechanical — an exit code from [`show-history.py`](show-history.py), a file test, or an exact string — so the runbook can be driven by an operator or by an AI. The in-namespace assertions in `verify.sh` replicate [`profiles.ts`](../../packages/sandbox/sandbox-local/src/profiles.ts); if that file changes, the probe must change with it.
 
 ## Known gaps
 
