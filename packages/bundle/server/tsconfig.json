@@ -17,6 +17,8 @@
     { "path": "../../shell/pwsh-sandbox" },
     { "path": "../../shell/shell" },
     { "path": "../../shell/shell-env" },
+    { "path": "../../spill/spill" },
+    { "path": "../../spill/spill-policy" },
     { "path": "../../subprocess/subprocess" },
     { "path": "../../subprocess/subprocess-local" },
     { "path": "../../util/brand" },

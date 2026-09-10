@@ -57,9 +57,6 @@
           disabled: !!js process.platform === 'win32'
           config:
             timeoutMs: 60000
-            # A Server session reads only its own workspace, so a spill artifact
-            # outside it is a path the model is handed but can never reopen.
-            spillPlacement: session-workspace
 
         - id: cloud-pwsh
           name: '@deepseek-ai/dsh-pwsh-sandbox'
@@ -70,6 +67,9 @@
 
     - id: server-runtime-router
       name: '@deepseek-ai/dsh-server/runtime-router'
+
+    - id: server-spill-store
+      name: '@deepseek-ai/dsh-server/spill-store'
 
     - id: server-fs-router
       name: '@deepseek-ai/dsh-server/fs-router'
@@ -162,11 +162,10 @@
   config:
     strictReads: true
 
-# The same read boundary applies to spilled tool results: keep them inside the
-# owning session's workspace so the locator the model receives is retrievable.
+# The Server owns spill placement; the generic local provider must not trust a
+# model-writable workspace path when performing host-side writes.
 - id: spill-local
-  config:
-    placement: session-workspace
+  disabled: true
 
 # Model-written workflow JavaScript runs outside the multi-user Server process.
 # The process sandbox exposes only its runtime, a private /tmp, and no network.

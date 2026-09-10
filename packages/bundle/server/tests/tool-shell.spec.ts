@@ -1,7 +1,7 @@
 /** Environment-neutral shell tool behavior. */
 
 import { realpathSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -9,9 +9,10 @@ import { CallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { JobId, type JobHooks, type JobStart } from '@deepseek-ai/dsh-jobs'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
-import type { ShellExecutor, ShellExecRequest, ShellExecSpec } from '@deepseek-ai/dsh-shell'
+import type { ShellExecutor, ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { ServerBindingId, ServerDeviceId } from '../src/environments.ts'
 import { parseProjectRoute, projectSessionState } from '../src/project-session.ts'
 import type { ServerRuntimeRouter, ServerRuntimeSelection } from '../src/runtime-router.ts'
@@ -33,23 +34,40 @@ async function canonicalDir(): Promise<string> {
   return dir
 }
 
-async function start(selection: ServerRuntimeSelection, policy?: SandboxExecutionPolicy) {
+async function start(
+  selection: ServerRuntimeSelection,
+  policy?: SandboxExecutionPolicy,
+  runResult?: ShellRunResult,
+  background?: { process: ShellProcess; capture(hooks: JobHooks): void },
+) {
   context = new Context()
   const resolve = vi.fn((request: ShellExecRequest) => request as ShellExecSpec)
-  const run = vi.fn().mockResolvedValue({
+  const run = vi.fn().mockResolvedValue(runResult ?? {
     exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 60_000,
     stdout: { text: 'ok\n', truncated: false }, stderr: { text: '', truncated: false },
   })
-  context.provide('shell', { resolve, run, sandboxMode: 'workspace-write' } as unknown as ShellExecutor)
+  const startProcess = vi.fn(() => {
+    if (background === undefined) throw new Error('unexpected background shell start')
+    return background.process
+  })
+  context.provide('shell', { resolve, run, start: startProcess, sandboxMode: 'workspace-write' } as unknown as ShellExecutor)
   context.provide('shellEnv', { collect: () => ({ DSH_TEST: '1' }) } as never)
   context.provide('serverRuntimeRouter', { current: () => selection } as unknown as ServerRuntimeRouter)
   if (policy !== undefined) {
     context.provide('sandboxPolicy', { resolve: () => policy } as unknown as SandboxPolicyService)
   }
+  if (background !== undefined) {
+    context.provide('jobs', {
+      start(spec: JobStart) {
+        background.capture(spec.run())
+        return JobId('shell-1')
+      },
+    } as never)
+  }
   await context.plugin(SystemPrompt)
   await context.plugin(ToolRuntime)
   await context.plugin(ToolShell)
-  return { resolve, run }
+  return { resolve, run, start: startProcess }
 }
 
 function localSelection(): ServerRuntimeSelection {
@@ -77,6 +95,7 @@ async function cloudSelection(): Promise<{ selection: ServerRuntimeSelection; wo
   const route = parseProjectRoute('/v1/users/alice/projects/alpha/environments')
   if (route === undefined) throw new Error('test project route is invalid')
   const state = projectSessionState(root, route.identity)
+  await mkdir(state.cwd, { recursive: true })
   return {
     workspace: state.cwd,
     selection: {
@@ -154,6 +173,119 @@ describe('server shell tool', () => {
     expect(shell.resolve).toHaveBeenCalledWith(expect.objectContaining({ workdir: workspace }))
   })
 
+  it('publishes a cloud collector spill path inside the project workspace', async () => {
+    const { selection, workspace } = await cloudSelection()
+    const source = join(workspace, '..', 'private-shell-output.log')
+    await writeFile(source, 'complete output')
+    await start(selection, workspaceWritePolicy(workspace), {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      aborted: false,
+      timeoutMs: 60_000,
+      stdout: { text: 'tail', truncated: true, spillPath: source },
+      stderr: { text: '', truncated: false },
+    })
+
+    const result = await callShell()
+    const block = result.content[0]
+    if (block?.type !== 'text') throw new Error('expected a text tool result')
+    const match = /full output: (.+)]/.exec(block.text)
+
+    expect(result.isError).toBe(false)
+    expect(match?.[1]?.startsWith(join(workspace, '.dsh', 'spill'))).toBe(true)
+    expect(await readFile(String(match?.[1]), 'utf8')).toBe('complete output')
+  })
+
+  it('contains cloud spill publication failure and keeps the bounded tail', async () => {
+    const { selection, workspace } = await cloudSelection()
+    const source = join(workspace, '..', 'private-shell-output.log')
+    await writeFile(source, 'complete output')
+    await writeFile(join(workspace, '.dsh'), 'occupied')
+    await start(selection, workspaceWritePolicy(workspace), {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      aborted: false,
+      timeoutMs: 60_000,
+      stdout: { text: 'tail', truncated: true, spillPath: source },
+      stderr: { text: '', truncated: false },
+    })
+    const warn = vi.spyOn(context!.logger, 'warn').mockImplementation(() => undefined)
+
+    const result = await callShell()
+    const block = result.content[0]
+    if (block?.type !== 'text') throw new Error('expected a text tool result')
+
+    expect(result.isError).toBe(false)
+    expect(block.text).toContain('tail\n[output truncated; full output: (unavailable)]')
+    expect(warn).toHaveBeenCalledWith('server shell could not publish %s spill output: %o', 'shell-stdout', expect.any(Error))
+  })
+
+  it('preserves a local executor spill path without applying Server host paths', async () => {
+    const spillPath = 'D:\\executor-private\\stdout.log'
+    await start(localSelection(), undefined, {
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      aborted: false,
+      timeoutMs: 60_000,
+      stdout: { text: 'tail', truncated: true, spillPath },
+      stderr: { text: '', truncated: false },
+    })
+
+    const result = await callShell()
+    const block = result.content[0]
+    if (block?.type !== 'text') throw new Error('expected a text tool result')
+
+    expect(result.isError).toBe(false)
+    expect(block.text).toContain(`full output: ${spillPath}`)
+  })
+
+  it('publishes lossy background output before the job settles', async () => {
+    const { selection, workspace } = await cloudSelection()
+    const source = join(workspace, '..', 'private-background-output.log')
+    await writeFile(source, 'complete background output')
+    let finish!: () => void
+    let hooks: JobHooks | undefined
+    const reads = [
+      { delta: 'running tail', lossy: true, stdoutSpillPath: source },
+      { delta: 'final tail', lossy: false },
+    ]
+    const process: ShellProcess = {
+      status: 'running',
+      exitCode: null,
+      signal: null,
+      done: new Promise<void>((resolve) => { finish = resolve }),
+      readOutput: () => reads.shift() ?? { delta: '', lossy: false },
+      kill: () => true,
+    }
+    await start(selection, workspaceWritePolicy(workspace), undefined, {
+      process,
+      capture(next) { hooks = next },
+    })
+
+    const result = await context!.tools.execute({
+      signal: new AbortController().signal,
+      callId: CallId('shell-background'),
+      name: 'shell',
+      arguments: { command: 'long-command', description: 'Run a long command', run_in_background: true },
+    })
+    expect(result).toMatchObject({ isError: false, value: { kind: 'background', jobId: 'shell-1' } })
+    const running = hooks?.readOutput?.()
+    expect(running).toContain('full output will be available after the job completes')
+    expect(running).not.toContain(source)
+
+    process.status = 'completed'
+    process.exitCode = 0
+    finish()
+    await hooks?.done
+    const settled = hooks?.readOutput?.() ?? ''
+    const published = /full output: (.+)]/.exec(settled)?.[1]
+    expect(published?.startsWith(join(workspace, '.dsh', 'spill'))).toBe(true)
+    expect(await readFile(String(published), 'utf8')).toBe('complete background output')
+  })
+
   it.each(['../outside', '/etc', 'nested/../../outside'])(
     'rejects the escaping cloud workdir %s before any spawn',
     async (workdir) => {
@@ -163,7 +295,10 @@ describe('server shell tool', () => {
       const result = await callShell(workdir)
 
       expect(result).toMatchObject({ isError: true })
-      expect(result.content[0]).toMatchObject({ text: expect.stringContaining('outside the session workspace') })
+      const block = result.content[0]
+      expect(block?.type).toBe('text')
+      if (block?.type !== 'text') throw new Error('expected a text tool result')
+      expect(block.text).toContain('outside the session workspace')
       expect(shell.resolve).not.toHaveBeenCalled()
       expect(shell.run).not.toHaveBeenCalled()
     },
@@ -208,7 +343,10 @@ describe('server shell tool', () => {
     })
 
     expect(result).toMatchObject({ isError: true })
-    expect(result.content[0]).toMatchObject({ text: expect.stringContaining('not supported yet') })
+    const block = result.content[0]
+    expect(block?.type).toBe('text')
+    if (block?.type !== 'text') throw new Error('expected a text tool result')
+    expect(block.text).toContain('not supported yet')
     expect(shell.resolve).not.toHaveBeenCalled()
     expect(shell.run).not.toHaveBeenCalled()
   })

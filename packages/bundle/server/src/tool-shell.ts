@@ -16,7 +16,9 @@ import type {
   ToolResult,
   ToolResultView,
 } from '@deepseek-ai/dsh-tools'
+import { ServerBackgroundOutput } from './background-spill.ts'
 import type { ServerRuntimeRouter, ServerRuntimeSelection } from './runtime-router.ts'
+import { publishServerSpillFile } from './spill-store.ts'
 import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-system-prompt'
@@ -83,12 +85,27 @@ function renderResult(result: ShellForegroundResult): string {
   return markers.length === 0 ? body : `${body}${body.endsWith('\n') ? '' : '\n'}${markers.join('\n')}`
 }
 
-function canonicalResult(result: ShellRunResult): ShellForegroundResult {
-  const output = (stream: CollectedOutput) => ({
-    text: stream.text,
-    truncated: stream.truncated,
-    ...(stream.spillPath === undefined ? {} : { spillPath: stream.spillPath }),
-  })
+async function canonicalResult(
+  ctx: Context,
+  result: ShellRunResult,
+  selection: ServerRuntimeSelection,
+): Promise<ShellForegroundResult> {
+  const output = async (stream: CollectedOutput, label: string) => {
+    let spillPath = stream.spillPath
+    if (spillPath !== undefined && selection.environment.type === 'cloud') {
+      try {
+        spillPath = await publishServerSpillFile(spillPath, selection.state, label)
+      } catch (error) {
+        ctx.logger.warn('server shell could not publish %s spill output: %o', label, error)
+        spillPath = undefined
+      }
+    }
+    return {
+      text: stream.text,
+      truncated: stream.truncated,
+      ...(spillPath === undefined ? {} : { spillPath }),
+    }
+  }
   return {
     kind: 'foreground' as const,
     exitCode: result.exitCode,
@@ -96,8 +113,8 @@ function canonicalResult(result: ShellRunResult): ShellForegroundResult {
     timedOut: result.timedOut,
     aborted: result.aborted,
     timeoutMs: result.timeoutMs,
-    stdout: output(result.stdout),
-    stderr: output(result.stderr),
+    stdout: await output(result.stdout, 'shell-stdout'),
+    stderr: await output(result.stderr, 'shell-stderr'),
     ...(result.sandbox === undefined ? {} : {
       sandbox: {
         mode: result.sandbox.mode,
@@ -292,10 +309,14 @@ export function apply(ctx: Context): void {
           ...(execution.agent === undefined ? {} : { owner: execution.agent }),
           run: () => {
             const process = ctx.shell.start(ctx.shell.resolve(request))
+            const output = new ServerBackgroundOutput(ctx, selection.state)
             return {
               cancel: () => { process.kill() },
-              done: process.done.then(() => processOutcome(process)),
-              readOutput: () => process.readOutput().delta,
+              done: process.done.then(async () => {
+                await output.settle(process)
+                return processOutcome(process)
+              }),
+              readOutput: () => output.read(process),
             }
           },
         })
@@ -307,7 +328,7 @@ export function apply(ctx: Context): void {
         error.name = 'AbortError'
         throw error
       }
-      return canonicalResult(result)
+      return canonicalResult(ctx, result, selection)
     },
     presentCall,
     presentResult,

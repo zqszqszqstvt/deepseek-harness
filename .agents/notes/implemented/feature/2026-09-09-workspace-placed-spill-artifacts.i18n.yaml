@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-09-workspace-placed-spill-artifacts.md
-2026-09-09-workspace-placed-spill-artifacts.md: a22c9993d106eb78cc7451fd625199915cd586f0
-2026-09-09-workspace-placed-spill-artifacts.zh.md: f583664a9d303a072ba55b455cb757045313833b
+2026-09-09-workspace-placed-spill-artifacts.md: ab88b94e816188f2a90c58d5c39a1b733bc1b0ab
+2026-09-09-workspace-placed-spill-artifacts.zh.md: 930f67d336a290d8aca754649c0724860792b7be
