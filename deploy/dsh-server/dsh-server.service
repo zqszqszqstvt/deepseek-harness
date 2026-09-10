@@ -1,0 +1,58 @@
+# systemd unit for dsh server with the cloud runtime contract.
+# install-host.sh substitutes @DSH_HOME@, @DATA_DIR@, and @SERVICE_USER@.
+#
+# Keep the listener on loopback: the Server has no authentication layer, so the
+# platform backend owns identity and must derive every URL userId from its
+# authenticated principal.
+
+[Unit]
+Description=dsh multi-user server (cloud runtime contract)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+
+# DSH_HOME holds cordis.patch.yml and credentials. It is outside every sandbox
+# namespace, which is why the resident contract lives in the persona row rather
+# than in $DSH_HOME/AGENTS.md (that file is never loaded by a Server session).
+Environment=DSH_HOME=@DSH_HOME@
+# The only host skill root a Server session can read: the provider loads it with
+# host filesystem calls and marks it trusted.
+Environment=DSH_BUNDLED_SKILL_DIR=/usr/local/share/dsh/skills
+# There is no $HOME inside the sandbox, so uv must never fetch an interpreter.
+Environment=UV_PYTHON_DOWNLOADS=never
+# The model credential. Prefer a drop-in or LoadFile over inlining it here; names
+# matching KEY|PASSWORD|SECRET|TOKEN are dropped from every child environment, so
+# it never reaches an agent shell.
+# Environment=DEEPSEEK_API_KEY=
+
+# Do NOT set PIP_CACHE_DIR, UV_CACHE_DIR, or CONDA_PKGS_DIRS here: the service
+# environment is forwarded into the sandbox, where no host cache path exists.
+# Each command points its cache into the workspace ($PWD/.cache/...).
+
+ExecStart=@DSH_BIN@ server --host 127.0.0.1 --port 3080 --data-dir @DATA_DIR@
+Restart=on-failure
+RestartSec=5
+
+# The sandbox needs to create mount and PID namespaces. Do not add CAP_SYS_ADMIN
+# to the unit: bubblewrap creates an unprivileged user namespace, and the host
+# must allow it (sysctl kernel.unprivileged_userns_clone=1, and on Ubuntu 24.04
+# kernel.apparmor_restrict_unprivileged_userns=0). If this host's bubblewrap is a
+# setuid binary instead, NoNewPrivileges must be dropped for it to work.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# @DATA_DIR@ must stay writable: it holds every user's workspace.
+ReadWritePaths=@DATA_DIR@ @DSH_HOME@
+
+[Install]
+WantedBy=multi-user.target

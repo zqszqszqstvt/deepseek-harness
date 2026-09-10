@@ -22,6 +22,8 @@ Server profile 还会在独立 bubblewrap 进程中运行模型编写的 `workfl
 
 <a id="execution-environments"></a>
 
+agent 运行时属于部署契约，而不是 harness 功能。strict 限制只绑定 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64`、`/etc`、`/run` 与本次调用会话的工作区，因此共享的 Python 或 Conda 工具链只有放在 `/usr/local` 下才可达，包镜像源只有放在 `/etc` 下才可达；放在 `/opt`、`/srv` 或服务用户 home 下的工具链在 namespace 里根本不存在，引用它会以 ENOENT 失败。把这一共享层锁成只读，正是它敢于暴露的原因：每个用户都能执行它，但谁都改不了别人 agent 会 import 的东西，而每用户的包留在自己工作区的 `.venv` 里。桌面 profile 惯用的两个宿主位置在这里是静默失效的，因为进程内读取被围栏限定在工作区：`$DSH_HOME/AGENTS.md` 探测为 unavailable 并被跳过且没有任何诊断，`$DSH_HOME/skills` 与 `$DSH_AGENTS_HOME/skills` 被当作不存在，因为本地 skill provider 把被拒的读取映射成路径缺失。受支持的投递点是 bundled skill 根（`DSH_BUNDLED_SKILL_DIR`，provider 用宿主文件系统调用加载它并标记为可信）与部署 persona（base 组合刻意留空的 `system-prompt` 行）。完整套件由 [`deploy/dsh-server`](../../../deploy/dsh-server/README.zh.md) 持有：镜像路径、部署 patch、配额与保留期、以及验收探针。
+
 ## 执行环境
 
 每个项目 Session 都将 Agent、模型历史和编排保留在 Server 中，同时把云端工作区和所有已连接的 Electron 工作区挂载为相互独立的执行环境。任一时刻只有一个 binding 处于活动状态。文件系统、子进程和 shell 调用都携带 Session binding 与环境 epoch；过期调用会失败，本地失败或断线绝不会回退到云端执行。

@@ -1,0 +1,43 @@
+# Agent Note: Ship the Server agent-runtime contract as a deployment kit
+
+Status: implemented
+
+English | [中文](2026-09-09-server-agent-runtime-deployment-kit.zh.md)
+
+## Problem
+
+A multi-user Server deployment that wants agents to use Python had no way to get there. The enforced facts were spread across source files and nowhere stated as a contract: strict confinement binds only `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`, `/run`, and the calling session's workspace, so a shared toolchain is reachable only under `/usr/local` and a toolchain under `/opt`, `/srv`, or the service home does not exist inside the namespace; caches cannot point at `$HOME` because `$HOME` is absent; a foreground call is capped at 60 seconds; `stdin` is closed so an interactive installer sees EOF immediately; and `/tmp` is a per-call tmpfs, so nothing carried through it survives to the next call. Each of these costs an agent a wasted probe or a failed install, and the model had no way to learn them except by hitting `[sandbox: file access denied under workspace-write mode]` repeatedly.
+
+Investigating where to state the contract surfaced a sharper problem: the two locations a desktop profile uses for exactly this are silently inert on the Server. `agent-instructions` probes `$DSH_HOME/AGENTS.md` through `ctx.get('fs')`, which a Server session fences to the workspace, so the probe returns unavailable and the scope is skipped without a diagnostic. The local skill provider reads `$DSH_HOME/skills` and `$DSH_AGENTS_HOME/skills` through the same fence and maps `FS_SANDBOX_DENIED` onto its absent-path predicate, so a skill placed there yields zero candidates and no error. An operator following the documented desktop workflow would therefore ship a contract that never loads, and see nothing to explain why.
+
+## Decision
+
+Ship the contract as a deployment kit under [`deploy/dsh-server`](../../../../deploy/dsh-server/README.md) and change no harness code. The kit is the artifact an operator builds from: a `Dockerfile` that installs the interpreter at `/usr/local/bin/python3.12` and `uv` at `/usr/local/bin/uv`, writes the package mirrors to `/etc/pip.conf` and `/etc/uv/uv.toml`, copies the skill to `/usr/local/share/dsh/skills`, locks the shared layer with `chmod -R a-w /usr/local`, and creates the service user with `DSH_HOME=/var/lib/dsh` and `--data-dir /var/lib/dsh/server-data`; a `cordis.patch.yml` that fills the `system-prompt` persona row the base bundle mounts empty; `skills/python-env/SKILL.md` with the cloud and local-executor command templates; `verify.sh` for host-side and in-namespace acceptance; and `workspace-gc.sh` for the two harness-owned artifact trees.
+
+The two delivery points are the ones the enforcement actually permits. Resident text goes to `system-prompt.persona`, which renders as the order-0 section for every session of every user and is read host-side during composition, so the workspace fence never applies to it. On-demand templates go to the bundled skill root, because `skill-filesystem` marks `bundledSkillDir` trusted and lists and reads it with host filesystem calls instead of `ctx.fs` — the only host skill directory a Server session can see, reachable through `DSH_BUNDLED_SKILL_DIR` with no configuration row. The kit states the desktop traps explicitly rather than leaving them to be rediscovered, and both the Server README and the Server subsystem document now carry them, since a deployment decision that silently does nothing belongs in the reference documentation and not only in a runbook.
+
+Isolation is expressed as a permission fact rather than a new mechanism: the shared layer is read-only for every user, so `pip install` into system site-packages or `conda install` into base fails with EROFS by design and no user can alter what another user's agent imports, while the writable layer is the calling session's own workspace `.venv`, which strict bubblewrap binds one session at a time. This is why exposing a shared toolchain at all is compatible with the workflow isolation stance: that note refused an undeclared read-only exposure of shared Conda environments to model-written code running outside a session boundary, whereas this kit declares the exposure, locks it read-only, and keeps every writable artifact inside the session that produced it.
+
+## Testing
+
+No repository test exercises the kit, and that is deliberate: it asserts facts about a host image, and the harness cannot test a deployment it does not run. `deploy/dsh-server/verify.sh` is its acceptance harness — static checks for the interpreter, `venv` and `ensurepip` availability, `uv`, both mirror files, absence of credentials in them, the read-only lock on `/usr/local`, skill frontmatter, the persona row and its brace freedom, exported host cache paths, and data-directory ownership, plus `--bwrap-probe`, which replicates the strict profile arguments and asserts inside a real namespace that the shared tools are visible, `/etc` mirrors are readable, the workspace is writable, `/usr/local` and `/etc` reject writes, `$HOME`, `/opt`, `/srv`, and `/var/lib` are absent, and the network is reachable. The probe is a copy of [`profiles.ts`](../../../../packages/sandbox/sandbox-local/src/profiles.ts) on purpose and both files say so, because a probe that drifts from the mount list would certify the wrong environment. The documentation sides are covered by the ordinary gates: translation pairing for the kit README pair and the two edited document pairs, `verify-md-links` for the new relative links, and `verify-md-wrap` for the edited package and subsystem prose.
+
+## Alternatives considered
+
+Landing the contract in `$DSH_HOME/AGENTS.md` plus a workspace skill was the obvious desktop-shaped answer and is the one this note exists to rule out: neither loads on the Server, and both fail silently.
+
+Contributing runtime facts through `ctx.shellEnv` (`DSH_PYTHON`, `DSH_VENV`, `DSH_ENV_MODE`) would remove the probing stage entirely and stays the right answer if the probe cost ever matters; it was deferred because the persona and skill already name the exact absolute paths, so the remaining saving is one or two tool calls per session against a new bundle row, config surface, tests, and three-end documentation.
+
+Editing the `shell` tool description in `tool-shell.ts`, as the minimal CLI preset does for its own environment, was rejected because the Server description is hardcoded: the change would cost code, a bundle release, and synchronized documentation in three repositories to deliver text a deployment can already write into its own persona row and edit without redeploying the harness.
+
+Seeding each new workspace from `ensureProject` would make per-project files first-class and remains the right home for a `.gitignore` that hides `.dsh/`; it was deferred because the bundled skill root already reaches every session without per-workspace state, and seeding adds a template-versioning and migration question that no current requirement forces.
+
+Adding an `extraReadonlyBinds` option to the sandbox so a toolchain could live under `/opt` was rejected: the strict profile is deliberately an empty root plus a fixed allow-list, and a configurable bind list would make the visible surface a per-deployment variable that the isolation argument then has to track. Placing the toolchain where the existing allow-list already reaches costs nothing and keeps the mount list a constant.
+
+## Consequences
+
+Operators get one buildable directory with explicit absolute paths, so the failure mode shifts from "the agent keeps hitting denied paths" to "the image does not match the contract", which `verify.sh` reports before any session runs. Deployments that had already placed instructions in `$DSH_HOME` now have a documented explanation and a migration target.
+
+The kit couples the repository to a deployment shape it does not run: the `Dockerfile` pins a base image, a Node major, and a `uv` copy stage, and the probe duplicates the strict mount arguments. Both are stated in the files, and the probe is the part that must be edited together with `profiles.ts`.
+
+Capacity remains a deployment job. `workspace-gc.sh` prunes only `.cache` and `.dsh/spill`, never a `.venv` or a user file, so per-user environment growth is controllable only through a filesystem quota on the data volume; the Server still enforces no quota and no retention of its own. The three-way meaning of `/tmp` also survives: the kit removes the harness's own dependence on it and tells the model not to use it, but a model-authored `/tmp` hand-off between two calls still fails.

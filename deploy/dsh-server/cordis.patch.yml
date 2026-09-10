@@ -1,0 +1,34 @@
+# Deployment-layer patch for dsh server.
+#
+# Copy to $DSH_HOME/cordis.patch.yml (in this image: /var/lib/dsh/cordis.patch.yml).
+#
+# Layering (docs/architecture.md:27): each bundle in profile order, then the
+# profile's cordis.patch.yml, then this home-level one, then any --patch overlay.
+# A patch targets a row by id and replaces its WHOLE config, so state every field
+# this row needs.
+#
+# This overrides exactly one row. The base bundle mounts it empty and says so:
+# "The deployment persona is a deployment choice" (packages/bundle/base/
+# cordis.patch.yml:427-432). The persona renders as the order-0 system-prompt
+# section, so it is resident for every session of every user — which is why the
+# runtime contract lives here instead of $DSH_HOME/AGENTS.md: that file is probed
+# through ctx.fs, and Server sessions fence reads to the workspace (strictReads),
+# so it is silently never loaded.
+#
+# The persona is a strict template: a literal `{{` in this text throws at
+# assembly. Do not add braces.
+
+- id: system-prompt
+  name: '@deepseek-ai/dsh-system-prompt'
+  config:
+    persona: |-
+      Runtime contract for cloud sessions:
+      - Every shell call is a fresh `bash -c` in a fresh sandbox. export, cd, and activate do not survive to the next call: put the environment and the directory in the same command line.
+      - Only this session's workspace is writable. /usr and /etc are read-only; $HOME, /opt, /var, and /srv do not exist in the sandbox. A "file access denied under workspace-write mode" result means the path was outside the workspace — change the path. Escalation is disabled in this deployment, so never request it.
+      - The shared interpreter is `python3` (the distribution's /usr/bin/python3, or /usr/local/bin/python3 in a container image) and the shared installer is /usr/local/bin/uv. Both are read-only: installing into them fails with EROFS by design. Create a per-task environment inside the workspace with `uv venv .venv` (or `python3 -m venv .venv`), then always invoke `.venv/bin/python` by path. Never source activate.
+      - Packages come from the public index unless /etc/pip.conf or /etc/uv/uv.toml names a mirror; either way the index is already configured, so do not pass --index-url.
+      - Point caches into the workspace: UV_CACHE_DIR="$PWD/.cache/uv", PIP_CACHE_DIR="$PWD/.cache/pip".
+      - Any install, build, or test that may exceed 60 seconds: submit it with run_in_background true, redirect its output to a log file inside the workspace, and collect the result with job_output. Do not use nohup with & and do not poll with sleep.
+      - stdin is closed, so an interactive prompt sees EOF immediately: always pass -y, -q, or --no-input.
+      - /tmp is destroyed at the end of each call. Never use it to carry data between calls; keep cross-call state in the workspace.
+      - For complete command templates, invoke the python-env skill.

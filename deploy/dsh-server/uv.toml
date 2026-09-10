@@ -1,0 +1,23 @@
+# /etc/uv/uv.toml — uv's system-level config, read-only inside the sandbox.
+#
+# Deliberately mirror-free: uv resolves from the public index. The two settings
+# below are what actually matter in a sandbox, so keep this file even without a
+# mirror. To use one, add the commented [[index]] block and point pip.conf at the
+# same URL so the two tools do not diverge.
+
+# [[index]]
+# url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+# default = true
+
+# Hardlinks fail across filesystems (workspace volumes, overlayfs), and a copy
+# keeps a .venv self-contained inside the user's workspace.
+link-mode = "copy"
+
+# The image's interpreter is the only one. Downloading another would need a
+# writable $HOME, which does not exist inside the sandbox, so the attempt would
+# burn a call and fail.
+python-downloads = "never"
+
+# Deliberately NOT set here: cache-dir. The cache must be per-call and inside the
+# workspace (UV_CACHE_DIR="$PWD/.cache/uv"), because no host path written here
+# exists inside the namespace.
