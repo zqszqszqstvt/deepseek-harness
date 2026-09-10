@@ -16,7 +16,7 @@ Status: implemented
 
 两个投递点正是强制执行面所允许的那两个。常驻文案走 `system-prompt.persona`：它作为 order-0 段落渲染进每个用户的每个会话，并且在组合阶段由宿主侧读取，因此工作区围栏根本不适用于它。按需模板走 bundled skill 根：`skill-filesystem` 把 `bundledSkillDir` 标记为可信，并用宿主文件系统调用而非 `ctx.fs` 列举和读取它——这是 Server 会话唯一能看到的宿主 skill 目录，通过 `DSH_BUNDLED_SKILL_DIR` 即可到达，不需要任何配置行。套件明确写出桌面侧的两个陷阱而不是留给后人重新发现，Server README 与 Server 子系统文档现在都承载了它们，因为一个"静默什么也不做"的部署决定属于参考文档，而不只属于运行手册。
 
-隔离被表达为一个权限事实，而不是一套新机制：共享层对每个用户只读，因此往系统 site-packages 里 `pip install`、往 base 里 `conda install` 会按设计得到 EROFS，谁都改不了别人 agent 会 import 的东西；而可写层是本次调用会话自己工作区里的 `.venv`，strict bubblewrap 每次只绑定一个会话。这也正是"暴露共享工具链"与 workflow 隔离立场相容的原因：那篇 note 拒绝的是把共享 Conda 环境**未声明地**只读暴露给运行在会话边界之外的模型代码，而本套件声明了这次暴露、把它锁成只读，并让每个可写产物都留在产生它的会话之内。
+隔离被表达为一个挂载事实，而不是一套新机制：strict profile 对 `/usr` 做 ro-bind，因此共享层对每个会话只读，往系统 site-packages 里 `pip install`、往 base 里 `conda install` 会按设计得到 EROFS，谁都改不了别人 agent 会 import 的东西；而可写层是本次调用会话自己工作区里的 `.venv`，strict bubblewrap 每次只绑定一个会话。宿主侧加锁只是纵深防御，套件把它收窄到安装器自己写的那些文件，因为对整个 `/usr/local` 做 `chmod -R a-w` 并不可移植：厂商目录连 root 都拒绝，而由内核模块保护的 `/usr/local/aegis`（阿里云云盾）在一台真实的 Alibaba Cloud Linux 宿主上正好让这一步中断，直到安装器改为只锁自己的路径，并把 `--lock-all` 与 `--no-lock` 作为显式选项。这也正是"暴露共享工具链"与 workflow 隔离立场相容的原因：那篇 note 拒绝的是把共享 Conda 环境**未声明地**只读暴露给运行在会话边界之外的模型代码，而本套件声明了这次暴露、把它锁成只读，并让每个可写产物都留在产生它的会话之内。
 
 ## Testing
 

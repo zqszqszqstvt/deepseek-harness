@@ -10,7 +10,7 @@ Every path an agent must reach has to live under a prefix the strict profile bin
 
 | Absolute path | What lives there | Inside the sandbox | Owner and mode |
 | --- | --- | --- | --- |
-| `python3` — `/usr/bin/python3` on a host, `/usr/local/bin/python3` in the image | shared interpreter | read-only | distribution package, or `root:root` with `/usr/local` locked `a-w` |
+| `python3` — `/usr/bin/python3` on a host, `/usr/local/bin/python3` in the image | shared interpreter | read-only | distribution package; the bind, not the mode bits, is what enforces it |
 | `/usr/local/bin/uv`, `/usr/local/bin/uvx` | shared installer/resolver | read-only | `root:root 0755` |
 | `/etc/pip.conf`, `/etc/uv/uv.toml` | optional index config; absent means the public index | read-only | `root:root 0644`, no credentials |
 | `/usr/local/share/dsh/skills/python-env/SKILL.md` | model-facing command templates | not needed: read host-side | `root:root`, `a-w` |
@@ -27,7 +27,7 @@ Per-user workspaces are `<data-dir>/users/<sha256(userId)>/workspace` for the re
 Three mechanisms decide the layout, and each one has a failure mode that looks like a bug but is the contract.
 
 - **Visible or nonexistent.** The strict profile starts from an empty root (`--tmpfs /` then `--remount-ro /`), so a toolchain under `/opt/conda` or in the service user's home is not merely forbidden — it does not exist, and a command referencing it fails with ENOENT. This is why the interpreter and `uv` go to `/usr/local` and the mirrors go to `/etc`.
-- **Read-only shared, writable per user.** `chmod -R a-w /usr/local` makes `conda install` into base or `pip install` into system site-packages fail with EROFS for every user, which is the intended isolation: nobody can change what another user's agent imports. Each session's packages live in its own workspace `.venv`, and strict bubblewrap binds exactly one workspace per call, so user A cannot read or write user B's environment.
+- **Read-only shared, writable per user.** What makes the shared layer safe to expose is the mount rather than the mode bits: the strict profile ro-binds `/usr`, so inside a session `pip install` into system site-packages or `conda install` into base fails with EROFS for every user, and nobody can change what another user's agent imports. Host-side locking is defense in depth and must stay narrow, because a blanket `chmod -R a-w /usr/local` aborts on vendor trees that reject it even as root — Aliyun aegis under `/usr/local/aegis` is one — so `install-host.sh` locks only the files it installed, with `--lock-all` and `--no-lock` as the explicit alternatives. Each session's packages live in its own workspace `.venv`, and strict bubblewrap binds exactly one workspace per call, so user A cannot read or write user B's environment.
 - **Host-side roots are the only way to ship instructions.** A Server session fences in-process reads to its workspace (`fs-sandbox` with `strictReads`), which silently disables the two locations a CLI or desktop deployment would use: `$DSH_HOME/AGENTS.md` is probed through `ctx.fs`, returns unavailable, and is skipped without a diagnostic; `$DSH_HOME/skills` and `$DSH_AGENTS_HOME/skills` are treated as absent because the skill provider maps `FS_SANDBOX_DENIED` to a missing path. The bundled skill root is the exception — it is loaded with host filesystem calls and marked trusted — which is what `DSH_BUNDLED_SKILL_DIR` exposes. Resident text goes to `system-prompt.persona` instead, a row the base bundle deliberately leaves empty for the deployment.
 
 ## Install on a Linux host

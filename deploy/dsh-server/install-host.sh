@@ -10,10 +10,10 @@
 # patch, and the unit: use it when the Server is started by hand (for example
 # `pnpm dsh server` from a checkout) under an existing login user, then copy
 # cordis.patch.yml into that user's own $DSH_HOME.
-# --no-lock skips the read-only lock on /usr/local, for hosts that keep writable
-# tooling there (a tarball Node, a global pnpm). Without the lock the shared
-# layer must be protected some other way, or a user's agent can modify what
-# another user's agent imports.
+# Host-side hardening defaults to the files this kit installed. --lock-all locks
+# all of /usr/local (tolerating vendor trees that reject chmod, such as Aliyun
+# aegis); --no-lock hardens nothing host-side. Agents cannot write under /usr
+# either way, because the strict profile ro-binds it.
 #
 # It installs the same layout the Dockerfile produces, so verify.sh accepts both:
 #   python3 (distribution), /usr/local/bin/uv        shared, read-only
@@ -30,7 +30,7 @@ SERVICE_USER=dsh
 SERVICE_UID=10001
 SKILL_ROOT=/usr/local/share/dsh/skills
 WITH_SYSTEMD=1
-WITH_LOCK=1
+WITH_LOCK=0   # 0 = kit files only (default), 1 = all of /usr/local, 2 = none
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -38,7 +38,8 @@ while [ $# -gt 0 ]; do
     --dsh-home) DSH_HOME_DIR="${2:?}"; shift 2 ;;
     --no-systemd) WITH_SYSTEMD=0; shift ;;
     --no-service-user) SERVICE_USER=""; shift ;;
-    --no-lock) WITH_LOCK=0; shift ;;
+    --no-lock) WITH_LOCK=2; shift ;;
+    --lock-all) WITH_LOCK=1; shift ;;
     -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -149,15 +150,48 @@ install -d -m 0755 "$SKILL_ROOT"
 cp -r "$HERE/skills/." "$SKILL_ROOT/"
 chmod -R a-w "$SKILL_ROOT"
 
-echo "== 6. lock the shared layer read-only =="
+echo "== 6. harden the files this kit installed =="
+# The read-only guarantee agents actually hit is the MOUNT, not the mode bits:
+# the strict profile ro-binds /usr, so nothing under /usr/local is writable
+# inside a session whatever the host permissions say
+# (packages/sandbox/sandbox-local/src/profiles.ts:19-45). Locking host-side is
+# defense in depth for the kit's own files only.
+#
+# Never lock /usr/local wholesale. Vendor trees there reject chmod even as root
+# — Aliyun aegis (/usr/local/aegis) is protected by a kernel module — and a
+# blanket chmod under `set -e` aborts the install halfway. Pass --lock-all only
+# on a host you know has no such tree.
+KIT_OWN_PATHS=(/usr/local/bin/uv /usr/local/bin/uvx /usr/local/share/dsh
+               /etc/pip.conf /etc/uv/uv.toml)
+# A container image installs the interpreter itself, so its real files are ours
+# too. On a host install /usr/local/bin/python3 is a symlink into /usr, which the
+# ro-bind already protects: locking it would chmod the distribution's file.
+for cand in /usr/local/bin/python3 /usr/local/bin/python3.1[0-9] /usr/local/lib/python3.*; do
+  [ -e "$cand" ] && [ ! -L "$cand" ] && KIT_OWN_PATHS+=("$cand")
+done
+
+lock_one() {
+  local target="$1" failures=0
+  chown -R root:root "$target" 2>/dev/null || failures=$((failures + 1))
+  chmod -R a-w "$target" 2>/dev/null || failures=$((failures + 1))
+  if [ "$failures" -eq 0 ]; then
+    echo "   locked $target"
+  else
+    echo "   note: could not fully lock $target (left as installed; the ro-bind still protects it)"
+  fi
+}
+for target in "${KIT_OWN_PATHS[@]}"; do
+  [ -e "$target" ] || continue
+  lock_one "$target"
+done
+
 if [ "$WITH_LOCK" -eq 1 ]; then
-  # Per-user installs belong in a workspace .venv; writing here must fail EROFS.
-  chown -R root:root /usr/local
-  chmod -R a-w /usr/local
-  echo "   /usr/local is now read-only (pass --no-lock to skip)"
-else
-  echo "   SKIPPED (--no-lock): agents can modify the shared layer, so isolation"
-  echo "   now depends on whatever else protects /usr/local"
+  echo "   --lock-all: locking the whole of /usr/local, tolerating protected trees"
+  chown -R root:root /usr/local 2>/dev/null || echo "   note: some chown failures under /usr/local (vendor-protected files)"
+  chmod -R a-w /usr/local 2>/dev/null || echo "   note: some chmod failures under /usr/local (vendor-protected files)"
+elif [ "$WITH_LOCK" -eq 2 ]; then
+  echo "   SKIPPED (--no-lock): nothing was hardened host-side. Agents still cannot"
+  echo "   write under /usr (the bind is read-only), but any other host process can."
 fi
 
 echo "== 7. sandbox prerequisites =="

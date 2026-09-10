@@ -75,11 +75,15 @@ if grep -Eq '://[^/[:space:]]+:[^@[:space:]]+@' /etc/pip.conf /etc/uv/uv.toml 2>
 else
   ok "index config carries no credentials"
 fi
-if touch /usr/local/.verify-write 2>/dev/null; then
-  rm -f /usr/local/.verify-write
-  bad "/usr/local is writable — the shared layer must be read-only (chmod -R a-w)"
+# The authoritative read-only guarantee is the mount, asserted by --bwrap-probe.
+# Host-side, only check that what the kit installed is not group/world writable:
+# a blanket chmod of /usr/local is neither portable (vendor trees such as Aliyun
+# aegis reject it even as root) nor necessary.
+writable="$(find /usr/local/bin/uv /usr/local/bin/uvx /usr/local/share/dsh   /etc/pip.conf /etc/uv/uv.toml -perm /022 -print -quit 2>/dev/null)"
+if [ -n "$writable" ]; then
+  bad "group/world writable shared file: $writable"
 else
-  ok "/usr/local rejects writes (EROFS/EACCES)"
+  ok "kit-owned shared files are not group/world writable"
 fi
 
 echo "== 3. contract skill (bundled root) =="
