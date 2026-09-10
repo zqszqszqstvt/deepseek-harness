@@ -18,6 +18,10 @@ Shared filesystem path helpers for DeepSeek Harness user data.
 
 `expandHomePath()` expands `~`, `~/...`, and Windows-style `~\...` prefixes against the operating-system home directory. It leaves non-tilde paths and `~user/...` untouched.
 
+## Workspace artifact paths
+
+`workspaceSpillRoot(workspaceRoot)` resolves `<workspace>/.dsh/spill`, the in-workspace spill directory for one session workspace: the location a deployment whose session reads are confined to that workspace must use, because a locator pointing outside the boundary is a path the model is handed but can never open. `WORKSPACE_DSH_DIR_NAME` is the workspace-local `.dsh` counterpart of `DSH_HOME_DIR_NAME` (it already carries project skills at `<workspace>/.dsh/skills`), and `WORKSPACE_SPILL_DIR_NAME` is the spill subdirectory name. Callers own creation, permissions, and retention of the returned directory.
+
 ## Watch paths
 
 `canonicalizeWatchPath()` gives a native filesystem watcher one stable spelling of its target. It resolves the deepest existing ancestor through `fs.realpath()` and restores any missing suffix, so a file or directory may still be watched before it is created. In particular, Windows 8.3 aliases cannot be mixed with the long paths emitted by the native watcher backend.

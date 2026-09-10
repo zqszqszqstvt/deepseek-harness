@@ -35,10 +35,20 @@ interface SaveTextSpill {
  */
 interface SpillOwner {
   sessionId: SessionId
+  /**
+   * The owning session's workspace directory as the caller knows it, supplied
+   * so a backend whose deployment confines session reads to that workspace can
+   * place the artifact where the locator is actually retrievable. It is a
+   * placement hint, never an authorization: the backend decides whether to use
+   * it, and a backend that stores outside the workspace ignores it.
+   */
+  workspaceRoot?: string
 }
 ```
 
 `SpillOwner.sessionId` 是保存时的存储命名空间。fork 后的会话会从种子日志继承已有的 spill 定位符；这些产物不会被复制或重新取得所有权，fork 后产生的 spill 则使用子会话 id。保留期清理可以连同其他旧会话产物一起使旧定位符失效；spill seam 不定义逐会话的清理策略。
+
+`SpillOwner.workspaceRoot` 是调用方对该会话工作区的报告，而落点由后端决定：当部署把会话读取限制在该工作区内时，后端会把它存放在工作区之下，因为边界之外的定位符是模型拿到却永远无法重新打开的路径；而拥有宿主私有存储的后端会忽略该提示。这个提示绝不构成任何授权——位置、名称与权限仍由后端拥有。[工作区内 spill 产物 Agent Note](../../.agents/notes/implemented/feature/2026-09-09-workspace-placed-spill-artifacts.zh.md) 记录了受限部署为何选择放进工作区，而不是放宽自身的读取围栏。
 
 ```ts type-equiv
 /**

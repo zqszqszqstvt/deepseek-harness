@@ -14,7 +14,7 @@ Every project mounts its Server-owned cloud workspace and the workspaces reporte
 
 ## Trust boundary
 
-The Server treats `userId` as a routing and isolation key, not authentication. A trusted platform backend must supply it. Electron authorizes local roots and enforces their physical path boundary; the Server neither synchronizes files nor falls back to cloud execution after a local error.
+The Server treats `userId` as a routing and isolation key, not authentication. A trusted platform backend must supply it. Electron authorizes local roots and enforces their physical path boundary; the Server neither synchronizes files nor falls back to cloud execution after a local error. A cloud shell call's working directory is confined to the session workspace before spawn, and the artifacts a Server Session is handed paths to — truncated command output and oversized tool results — are spilled inside that same workspace, so a path the model receives is a path its own read boundary can reopen.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 

@@ -18,6 +18,31 @@ export const DEFAULT_DSH_HOME_DISPLAY = `~/${DSH_HOME_DIR_NAME}`
 export const DSH_HOME_ENV = 'DSH_HOME'
 
 /**
+ * Harness-owned artifact directory inside a session workspace: the
+ * workspace-local counterpart of {@link DSH_HOME_DIR_NAME}, already carrying
+ * project skills at `<workspace>/.dsh/skills`.
+ */
+export const WORKSPACE_DSH_DIR_NAME = DSH_HOME_DIR_NAME
+
+/** Spill artifact directory name inside a workspace's `.dsh` directory. */
+export const WORKSPACE_SPILL_DIR_NAME = 'spill'
+
+/**
+ * Resolve the in-workspace spill directory for one session workspace.
+ *
+ * A deployment whose read boundary IS the workspace (a strict-reads filesystem
+ * fence plus a mount namespace that exposes nothing else) must keep spill
+ * artifacts inside it: a locator that points outside the boundary is a path the
+ * model is handed but can never open. Callers still own creation, permissions,
+ * and retention of the returned directory.
+ * @param workspaceRoot - the session workspace directory.
+ * @returns the absolute `<workspaceRoot>/.dsh/spill` path.
+ */
+export function workspaceSpillRoot(workspaceRoot: string): string {
+  return join(resolve(workspaceRoot), WORKSPACE_DSH_DIR_NAME, WORKSPACE_SPILL_DIR_NAME)
+}
+
+/**
  * Give a native filesystem watcher one canonical spelling of a path, even
  * when its final components do not exist yet. The deepest existing ancestor
  * is resolved through {@link realpath}; when a suffix is missing, that

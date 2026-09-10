@@ -371,10 +371,24 @@ export interface Config {
   maxSpillBytes?: number
   /** Grace period for kill escalation and inherited pipes; at most `MAX_TIMER_DELAY_MS`. */
   graceMs?: number
+  /**
+   * Where a truncated command's spill file lands. `session-workspace` is the
+   * placement a deployment whose session reads are confined to the workspace
+   * needs, so the `spillPath` this executor reports is one the model can reopen;
+   * `private` keeps the host-private default a local deployment can read anyway.
+   */
+  spillPlacement?: SpillPlacement
 }
+
+/**
+ * Where one command's full-stream spill file lives: `private` leaves it to the
+ * subprocess runtime's host-private default; `session-workspace` keeps it inside
+ * the session's own workspace.
+ */
+export type SpillPlacement = 'private' | 'session-workspace'
 ```
 
-来源：[`packages/shell/bash-local/src/index.ts:41`](../packages/shell/bash-local/src/index.ts)
+来源：[`packages/shell/bash-local/src/index.ts:49`](../packages/shell/bash-local/src/index.ts)
 
 <a id="deepseek-aidsh-bash-sandbox"></a>
 
@@ -1561,6 +1575,13 @@ export interface Config {
   /** Grace period for kill escalation and inherited pipes; at most `MAX_TIMER_DELAY_MS`. */
   graceMs?: number
   /**
+   * Where a truncated command's spill file lands. `session-workspace` is the
+   * placement a deployment whose session reads are confined to the workspace
+   * needs, so the `spillPath` this executor reports is one the model can reopen;
+   * `private` keeps the host-private default a local deployment can read anyway.
+   */
+  spillPlacement?: SpillPlacement
+  /**
    * Explicit pwsh executable. When omitted, well-known Windows install
    * locations and PATH entries are probed in order (PowerShell 7 install,
    * PATH entries such as the Microsoft Store install, then Windows
@@ -1568,9 +1589,16 @@ export interface Config {
    */
   pwshPath?: string
 }
+
+/**
+ * Where one command's full-stream spill file lives: `private` leaves it to the
+ * subprocess runtime's host-private default; `session-workspace` keeps it inside
+ * the session's own workspace.
+ */
+export type SpillPlacement = 'private' | 'session-workspace'
 ```
 
-来源：[`packages/shell/pwsh-local/src/index.ts:58`](../packages/shell/pwsh-local/src/index.ts)
+来源：[`packages/shell/pwsh-local/src/index.ts:66`](../packages/shell/pwsh-local/src/index.ts)
 
 <a id="deepseek-aidsh-pwsh-sandbox"></a>
 
@@ -2095,12 +2123,25 @@ export interface Config {
    * Root directory for spill files. Omitted uses a lazily-created private
    * (0700) per-process directory under the OS temp dir — the safe default for
    * a local deployment. Set it to keep spill files under a known location.
+   * Consulted only by the `private` placement.
    */
   root?: string
+  /**
+   * Which root one request's artifact lands under. `private` keeps the
+   * historical host-private {@link Config.root}; `session-workspace` places
+   * artifacts under `<workspace>/.dsh/spill` inside the OWNING session's own
+   * workspace, which is the placement a deployment that confines session reads
+   * to that workspace needs for the returned locator to be retrievable by the
+   * very session that produced it.
+   */
+  placement?: SpillPlacement
 }
+
+/** Where one session's spill artifacts live. */
+export type SpillPlacement = 'private' | 'session-workspace'
 ```
 
-来源：[`packages/spill/spill-local/src/index.ts:22`](../packages/spill/spill-local/src/index.ts)
+来源：[`packages/spill/spill-local/src/index.ts:26`](../packages/spill/spill-local/src/index.ts)
 
 <a id="deepseek-aidsh-spill-policy"></a>
 
@@ -2120,7 +2161,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/spill/spill-policy/src/index.ts:60`](../packages/spill/spill-policy/src/index.ts)
+来源：[`packages/spill/spill-policy/src/index.ts:59`](../packages/spill/spill-policy/src/index.ts)
 
 <a id="deepseek-aidsh-storage-domain"></a>
 

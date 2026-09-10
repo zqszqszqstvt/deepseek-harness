@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -94,6 +94,72 @@ describe('LocalBashExecutor.run', () => {
     expect(result.stdout.text).toBe('x'.repeat(500))
     expect(result.stderr.truncated).toBe(true)
     expect(result.stderr.text.length).toBeLessThanOrEqual(100)
+  })
+
+  it('keeps a truncated command\'s spill file in the private directory by default', async () => {
+    const { bash } = await setup({ maxOutputBytes: 100 })
+    const result = await bash.run(bash.resolve({
+      command: 'for i in $(seq 1 100); do printf "line-%04d\\n" $i; done',
+    }))
+
+    expect(result.stdout.truncated).toBe(true)
+    expect(result.stdout.spillPath?.startsWith(spillDir)).toBe(true)
+  })
+
+  it('places the spill file inside the session workspace when so configured', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-bash-spill-workspace-'))
+    const { ctx, bash } = await setup({ maxOutputBytes: 100, spillPlacement: 'session-workspace' })
+    try {
+      const result = await bash.run(bash.resolve({
+        command: 'for i in $(seq 1 100); do printf "line-%04d\\n" $i; done',
+        sandboxPolicy: { mode: 'workspace-write', workspaceRoot: workspace },
+      }))
+
+      expect(result.stdout.truncated).toBe(true)
+      // The artifact is where the session's own read boundary can reopen it, and
+      // it holds the whole stream the in-memory tail dropped.
+      expect(result.stdout.spillPath?.startsWith(join(workspace, '.dsh', 'spill'))).toBe(true)
+      expect(readFileSync(String(result.stdout.spillPath), 'utf8')).toContain('line-0001')
+      expect(result.stdout.text).toContain('line-0100')
+    } finally {
+      await ctx.fiber.dispose()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('falls back to the workdir when no sandbox policy stamped a root', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-bash-spill-workdir-'))
+    const { ctx, bash } = await setup({ maxOutputBytes: 100, spillPlacement: 'session-workspace' })
+    try {
+      const result = await bash.run(bash.resolve({
+        command: 'for i in $(seq 1 100); do printf "line-%04d\\n" $i; done',
+        workdir: workspace,
+      }))
+
+      expect(result.stdout.spillPath?.startsWith(join(workspace, '.dsh', 'spill'))).toBe(true)
+    } finally {
+      await ctx.fiber.dispose()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the private spill directory under a read-only policy', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-bash-spill-readonly-'))
+    const { ctx, bash } = await setup({ maxOutputBytes: 100, spillPlacement: 'session-workspace' })
+    try {
+      const result = await bash.run(bash.resolve({
+        command: 'for i in $(seq 1 100); do printf "line-%04d\\n" $i; done',
+        sandboxPolicy: { mode: 'read-only', workspaceRoot: workspace },
+      }))
+
+      // read-only promises no workspace writes, and this artifact is the
+      // harness's own, so it stays in the private directory.
+      expect(result.stdout.spillPath?.startsWith(spillDir)).toBe(true)
+      expect(existsSync(join(workspace, '.dsh'))).toBe(false)
+    } finally {
+      await ctx.fiber.dispose()
+      rmSync(workspace, { recursive: true, force: true })
+    }
   })
 
   it('per-call timeout takes precedence under the cap and kills on expiry', async () => {

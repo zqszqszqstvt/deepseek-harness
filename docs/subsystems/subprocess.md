@@ -126,6 +126,16 @@ interface SubprocessSpawnSpec {
    * tombstone that removes an ordinary ambient entry from the child.
    */
   env?: NodeJS.ProcessEnv | undefined
+  /**
+   * Absolute directory for this spawn's full-stream spill files; omitted uses
+   * the implementation's private default. A caller whose own read boundary is
+   * narrower than the host filesystem — a session confined to one workspace —
+   * supplies a directory inside that boundary, because a `spillPath` the caller
+   * cannot reopen is a locator it must not hand to its consumer. The directory
+   * is created on demand with owner-only permissions; a spill that cannot be
+   * opened is dropped rather than failing the process.
+   */
+  spillDir?: string | undefined
 }
 ```
 

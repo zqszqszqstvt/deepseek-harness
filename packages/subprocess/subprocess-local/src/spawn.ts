@@ -10,7 +10,7 @@
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import type { Readable } from 'node:stream'
 import { randomBytes } from 'node:crypto'
-import { closeSync, mkdtempSync, openSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, mkdirSync, mkdtempSync, openSync, unlinkSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleepMs } from 'node:timers/promises'
@@ -158,18 +158,29 @@ export class OutputCollector {
       this.discardSpill()
       return
     }
-    if (this.spillFd === undefined) {
-      // Random suffix + O_EXCL + no-follow-equivalent ('wx' fails on any
-      // existing path, symlink or not) + owner-only mode: defeats spill-path
-      // prediction and symlink planting in shared tmp dirs.
-      this.spillFile = join(
-        this.spillDir,
-        `dsh-subprocess-${process.pid}-${++spillCounter}-${randomBytes(6).toString('hex')}-${this.label}.log`,
-      )
-      this.spillFd = openSync(this.spillFile, 'wx', 0o600)
-      for (const prior of this.chunks) writeSync(this.spillFd, prior)
+    // Every failure here happens inside a stream 'data' listener, so it must not
+    // escape as an uncaught host error: an unwritable spill degrades to the
+    // bounded in-memory tail (the spill-less shape) instead of failing the run.
+    try {
+      if (this.spillFd === undefined) {
+        // A caller-supplied directory — a session's own workspace spill root —
+        // may not exist yet; the private default already does. Owner-only
+        // creation keeps the artifact unreadable to other local users.
+        mkdirSync(this.spillDir, { recursive: true, mode: 0o700 })
+        // Random suffix + O_EXCL + no-follow-equivalent ('wx' fails on any
+        // existing path, symlink or not) + owner-only mode: defeats spill-path
+        // prediction and symlink planting in shared tmp dirs.
+        this.spillFile = join(
+          this.spillDir,
+          `dsh-subprocess-${process.pid}-${++spillCounter}-${randomBytes(6).toString('hex')}-${this.label}.log`,
+        )
+        this.spillFd = openSync(this.spillFile, 'wx', 0o600)
+        for (const prior of this.chunks) writeSync(this.spillFd, prior)
+      }
+      writeSync(this.spillFd, chunk)
+    } catch {
+      this.discardSpill()
     }
-    writeSync(this.spillFd, chunk)
   }
 
   /** Stop spilling and remove the file once it can no longer hold the complete stream. */
@@ -318,7 +329,7 @@ function signalTree(
  * Spawn one isolated detached process tree with the spec's per-stream stdio
  * dispositions. Runtime exits resolve `done` as {@link SubprocessOutcome};
  * only spawn failures reject.
- * @param spec - fully resolved argv, cwd, stdio, grace, cancellation, environment.
+ * @param spec - fully resolved argv, cwd, stdio, grace, cancellation, environment, and spill directory.
  * @param internals - test-only spill-directory, platform, and taskkill overrides.
  * @returns live subprocess handle.
  * @throws when `graceMs` cannot be represented by one Node timer.
@@ -327,7 +338,9 @@ export function spawnSubprocess(spec: SubprocessSpawnSpec, internals: SpawnInter
   if (!Number.isFinite(spec.graceMs) || spec.graceMs <= 0 || spec.graceMs > MAX_TIMER_DELAY_MS) {
     throw new Error(`subprocess graceMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
   }
-  const spillDir = internals.spillDir ?? privateSpillDir()
+  // The caller's own directory wins: a session confined to one workspace must
+  // keep spill artifacts inside it, or the path it reports is unreadable.
+  const spillDir = spec.spillDir ?? internals.spillDir ?? privateSpillDir()
   const platform = internals.platform ?? process.platform
   const taskkill = internals.taskkill ?? taskkillProcessTree
   const linuxGroupHasLiveMembers = internals.linuxProcessGroupHasLiveMembers ?? linuxProcessGroupHasLiveMembers

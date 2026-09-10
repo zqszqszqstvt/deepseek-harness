@@ -8,11 +8,12 @@
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
 import { CallId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { workspaceSpillRoot } from '@deepseek-ai/dsh-home-paths'
 import type { SaveTextSpill } from '@deepseek-ai/dsh-spill'
 import LocalSpillStore, { encodeSegment, privateRoot, saveTextFile, sessionDir } from '@deepseek-ai/dsh-spill-local'
 
@@ -141,5 +142,50 @@ describe('LocalSpillStore service', () => {
     const filePath = (await saveTextFile({ root, sessionId: 's', suggestedName: 'f', content: 'x' })).path
     await ctx.plugin(LocalSpillStore, { root: filePath })
     await expect(ctx.spillStore.saveText(request())).rejects.toThrow()
+  })
+
+  it('saves inside the owning session workspace under session-workspace placement', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-spill-workspace-'))
+    try {
+      const ctx = new Context()
+      await ctx.plugin(LocalSpillStore, { placement: 'session-workspace' })
+      const ref = await ctx.spillStore.saveText(
+        request({ owner: { sessionId: SessionId('sess-1'), workspaceRoot: workspace } }),
+      )
+
+      // The locator is a path the session's own read boundary can reopen.
+      expect(dirname(ref.locator)).toBe(sessionDir(workspaceSpillRoot(workspace), 'sess-1'))
+      expect(readFileSync(ref.locator, 'utf8')).toBe('the full body')
+      if (process.platform !== 'win32') {
+        expect(statSync(dirname(ref.locator)).mode & 0o777).toBe(0o700)
+      }
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a session-workspace save whose owner carries no workspace', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LocalSpillStore, { placement: 'session-workspace' })
+
+    // Rejecting keeps the policy on its best-effort path (inline result) instead
+    // of handing the model a locator outside its own read boundary.
+    await expect(ctx.spillStore.saveText(request())).rejects.toThrow(/requires the owning session workspace/)
+  })
+
+  it('ignores the owner workspace under the default placement', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-spill-ignored-'))
+    try {
+      const ctx = new Context()
+      await ctx.plugin(LocalSpillStore, { root })
+      const ref = await ctx.spillStore.saveText(
+        request({ owner: { sessionId: SessionId('sess-1'), workspaceRoot: workspace } }),
+      )
+
+      expect(dirname(ref.locator)).toBe(sessionDir(root, 'sess-1'))
+      expect(existsSync(join(workspace, '.dsh'))).toBe(false)
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
   })
 })

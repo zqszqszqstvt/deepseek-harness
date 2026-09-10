@@ -4,6 +4,7 @@ import { isAbsolute, relative as hostRelative, resolve as resolveHostPath, posix
 import type { Context } from '@deepseek-ai/cordis'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
+import { resolveConfinedCwd } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { parseExitStatus } from '@deepseek-ai/dsh-shell'
 import type { CollectedOutput, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
@@ -114,15 +115,35 @@ function processOutcome(process: ShellProcess): { status: 'completed' | 'killed'
     : { status: 'completed', detail: `exit code: ${process.exitCode ?? 0}` }
 }
 
+/**
+ * Resolve one shell call's working directory in the active environment.
+ *
+ * The cloud branch resolves against the SAME per-call identity that confines
+ * the execution — the resolved policy root, which the sandbox binds — and then
+ * canonicalizes and containment-checks the result, so an escaping absolute or
+ * relative `workdir` fails before any spawn instead of relying on the mount
+ * namespace to make the target unreachable. Without a policy (a deployment with
+ * no `ctx.sandboxPolicy`) the resolved value passes through, exactly as the
+ * platform bash tool does.
+ *
+ * The local branch deliberately does NOT confine here: the workdir is a path on
+ * a remote device whose filesystem this process cannot canonicalize, and the
+ * executor owns that device's physical boundary (it resolves every directory
+ * against the authorized project root before spawning).
+ */
 function resolveWorkdir(
   requested: string | undefined,
   execution: ToolExecution,
   selection: ServerRuntimeSelection,
+  policy: SandboxExecutionPolicy | undefined,
 ): string {
   const sessionCwd = execution.agent?.session.header.cwd ?? selection.state.cwd
   if (selection.environment.type === 'cloud') {
-    if (requested === undefined) return sessionCwd
-    return isAbsolute(requested) ? requested : resolveHostPath(sessionCwd, requested)
+    const base = policy?.workspaceRoot ?? sessionCwd
+    const resolved = requested === undefined
+      ? base
+      : isAbsolute(requested) ? requested : resolveHostPath(base, requested)
+    return policy === undefined ? resolved : resolveConfinedCwd(resolved, policy)
   }
   const root = selection.environment.rootPath
   if (root === undefined) throw new Error('shell: local workspace root is unavailable')
@@ -241,10 +262,12 @@ export function apply(ctx: Context): void {
     async execute(args: ShellToolArgs, execution) {
       validateArgs(args)
       const selection = runtime.current()
-      const workdir = resolveWorkdir(args.workdir, execution, selection)
       const policy: SandboxExecutionPolicy | undefined = sandboxPolicy?.resolve(
         execution.agent === undefined ? {} : { session: execution.agent.session },
       )
+      // Resolved before the workdir so one identity decides both the confinement
+      // and the directory the command starts in.
+      const workdir = resolveWorkdir(args.workdir, execution, selection, policy)
       const request = {
         command: args.command,
         workdir,

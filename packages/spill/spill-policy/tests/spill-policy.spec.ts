@@ -55,9 +55,9 @@ function textTool(name: string, text: string) {
 }
 
 /** A minimal exec carrying a session header id (the spill owner). */
-function exec(name: string, session = 's1'): ToolExecution {
-  // Only agent.session.header.id is read by the policy; a structural stub suffices.
-  const agent = { session: { header: { id: SessionId(session) } } }
+function exec(name: string, session = 's1', cwd?: string): ToolExecution {
+  // Only agent.session.header.id and .cwd are read by the policy; a structural stub suffices.
+  const agent = { session: { header: { id: SessionId(session), ...(cwd === undefined ? {} : { cwd }) } } }
   return { callId: CallId(`call-${name}`), name, arguments: {}, agent, signal: testToolSignal } as unknown as ToolExecution
 }
 
@@ -137,6 +137,7 @@ describe('oversized plain-text replacement', () => {
     expect(spill?.saves[0]?.source.toolName).toBe('big')
     expect(spill?.saves[0]?.suggestedName).toBe('big.txt')
     expect(spill?.saves[0]?.owner.sessionId).toBe('s1')
+    expect(spill?.saves[0]?.owner.workspaceRoot).toBeUndefined()
 
     const text = textOf(result.content)
     expect(text).not.toBe(body)
@@ -148,6 +149,17 @@ describe('oversized plain-text replacement', () => {
     // is smaller than the original — the whole point of spilling.
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(200)
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(body.length)
+  })
+
+  it('forwards the session workspace so a confined backend can place the artifact', async () => {
+    const { ctx, spill } = await setup({ maxInlineBytes: 200 })
+    ctx.tools.register(textTool('big', 'x'.repeat(1_600)))
+
+    await ctx.tools.execute(exec('big', 's1', '/srv/data/users/alice/workspace'))
+
+    // The backend decides whether to use it; the policy only reports the owner's
+    // workspace so a locator can stay inside the session's own read boundary.
+    expect(spill?.saves[0]?.owner.workspaceRoot).toBe('/srv/data/users/alice/workspace')
   })
 
   it('keeps the inline result when the notice-only replacement would exceed the cap', async () => {

@@ -35,10 +35,20 @@ interface SaveTextSpill {
  */
 interface SpillOwner {
   sessionId: SessionId
+  /**
+   * The owning session's workspace directory as the caller knows it, supplied
+   * so a backend whose deployment confines session reads to that workspace can
+   * place the artifact where the locator is actually retrievable. It is a
+   * placement hint, never an authorization: the backend decides whether to use
+   * it, and a backend that stores outside the workspace ignores it.
+   */
+  workspaceRoot?: string
 }
 ```
 
 `SpillOwner.sessionId` is the save-time storage namespace. Forked sessions inherit existing spill locators from the seeded log; those artifacts are not copied or re-owned, and spills produced after the fork use the child session id. A retention-period cleanup may expire old locators with other old session artifacts; the spill seam does not define a per-session cleanup policy.
+
+`SpillOwner.workspaceRoot` is the caller's report of that session's workspace, and placement is the backend's decision: a backend whose deployment confines session reads to the workspace stores under it, because a locator outside that boundary is a path the model is handed and can never reopen, while a backend with a host-private store ignores the hint. The hint never authorizes anything — the backend still owns the location, the name, and the permissions. The [workspace-placed spill artifacts Agent Note](../../.agents/notes/implemented/feature/2026-09-09-workspace-placed-spill-artifacts.md) records why a confined deployment places inside the workspace instead of widening its read fence.
 
 ```ts type-equiv
 /**

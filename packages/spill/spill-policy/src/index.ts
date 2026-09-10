@@ -48,8 +48,7 @@ import z from '@deepseek-ai/schemastery'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { TextRetainer, describeOmitted } from '@deepseek-ai/dsh-output-retention'
 import type { Omitted } from '@deepseek-ai/dsh-output-retention'
-import type { SaveTextSpill, SpillRef } from '@deepseek-ai/dsh-spill'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { SaveTextSpill, SpillOwner, SpillRef } from '@deepseek-ai/dsh-spill'
 import type { CallId } from '@deepseek-ai/dsh-llm'
 import type { PostToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { SpillPolicyExec } from './types.ts'
@@ -86,9 +85,13 @@ function flattenPlainText(content: ContentBlock[]): string | undefined {
   return text
 }
 
-/** The owning session id, or `undefined` for a call with no agent (a direct/test call). */
-function ownerSessionId(exec: ToolExecution): SessionId | undefined {
-  return (exec as SpillPolicyExec).agent?.session.header.id
+/** The owning session's storage namespace, or `undefined` for a call with no agent (a direct/test call). */
+function spillOwner(exec: ToolExecution): SpillOwner | undefined {
+  const header = (exec as SpillPolicyExec).agent?.session.header
+  if (header === undefined) return undefined
+  // The session workspace travels with the owner so a backend confined to that
+  // workspace can place the artifact where the returned locator is retrievable.
+  return { sessionId: header.id, ...(header.cwd === undefined ? {} : { workspaceRoot: header.cwd }) }
 }
 
 /** Build the bounded head/tail preview for `text`, splitting `budget` bytes across the two ends. */
@@ -130,12 +133,12 @@ export function apply(ctx: Context, config: Config): void {
   async function spillReplacement(
     text: string,
     totalBytes: number,
-    sessionId: SessionId | undefined,
+    owner: SpillOwner | undefined,
     toolName: string,
     callId: CallId,
     label: 'result' | 'dispatch',
   ): Promise<string | undefined> {
-    if (sessionId === undefined) {
+    if (owner === undefined) {
       ctx.logger.warn(`spill-policy: no session owner for ${toolName} ${label}; keeping the inline content`)
       return undefined
     }
@@ -145,7 +148,7 @@ export function apply(ctx: Context, config: Config): void {
       return undefined
     }
     const save: SaveTextSpill = {
-      owner: { sessionId },
+      owner,
       source: { toolName, callId, label },
       suggestedName: `${toolName}.txt`,
       content: text,
@@ -202,7 +205,7 @@ export function apply(ctx: Context, config: Config): void {
     const totalBytes = Buffer.byteLength(text, 'utf8')
     if (totalBytes <= maxInlineBytes) return decision
 
-    const replacedText = await spillReplacement(text, totalBytes, ownerSessionId(exec), exec.name, exec.callId, 'result')
+    const replacedText = await spillReplacement(text, totalBytes, spillOwner(exec), exec.name, exec.callId, 'result')
     if (replacedText === undefined) return decision
     const replaced: ContentBlock[] = [{ type: 'text', text: replacedText }]
     return { kind: 'accept', content: replaced, ...decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {} }
@@ -225,7 +228,7 @@ export function apply(ctx: Context, config: Config): void {
     if (totalBytes <= maxInlineBytes) return content
 
     const replacedText = await spillReplacement(
-      text, totalBytes, ownerSessionId(dispatch.exec), dispatch.name, dispatch.subCallId, 'dispatch')
+      text, totalBytes, spillOwner(dispatch.exec), dispatch.name, dispatch.subCallId, 'dispatch')
     if (replacedText === undefined) return content
     return [{ type: 'text', text: replacedText }]
   }, { prepend: true })

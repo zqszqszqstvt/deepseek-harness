@@ -36,6 +36,14 @@ export function SpillLocator(locator: string): SpillLocator {
  */
 export interface SpillOwner {
   sessionId: SessionId
+  /**
+   * The owning session's workspace directory as the caller knows it, supplied
+   * so a backend whose deployment confines session reads to that workspace can
+   * place the artifact where the locator is actually retrievable. It is a
+   * placement hint, never an authorization: the backend decides whether to use
+   * it, and a backend that stores outside the workspace ignores it.
+   */
+  workspaceRoot?: string
 }
 
 /**

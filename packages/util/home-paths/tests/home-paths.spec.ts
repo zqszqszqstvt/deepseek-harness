@@ -5,12 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_DSH_HOME_DISPLAY,
   DSH_HOME_DIR_NAME,
+  WORKSPACE_DSH_DIR_NAME,
+  WORKSPACE_SPILL_DIR_NAME,
   canonicalizeWatchPath,
   defaultDshHome,
   dshHomeDisplay,
   dshHomePath,
   expandHomePath,
   resolveDshHome,
+  workspaceSpillRoot,
 } from '@deepseek-ai/dsh-home-paths'
 
 afterEach(() => {
@@ -22,6 +25,16 @@ describe('dsh path helpers', () => {
     expect(DSH_HOME_DIR_NAME).toBe('.dsh')
     expect(DEFAULT_DSH_HOME_DISPLAY).toBe('~/.dsh')
     expect(defaultDshHome()).toBe(join(homedir(), '.dsh'))
+  })
+
+  it('owns the in-workspace spill directory convention', () => {
+    expect(WORKSPACE_DSH_DIR_NAME).toBe(DSH_HOME_DIR_NAME)
+    expect(WORKSPACE_SPILL_DIR_NAME).toBe('spill')
+    expect(workspaceSpillRoot('/srv/data/users/alice/workspace'))
+      .toBe(join(resolve('/srv/data/users/alice/workspace'), '.dsh', 'spill'))
+    // A relative workspace resolves against the process cwd before joining, so
+    // the returned root is always absolute.
+    expect(workspaceSpillRoot('ws')).toBe(join(process.cwd(), 'ws', '.dsh', 'spill'))
   })
 
   it('expands tilde paths without changing non-tilde paths', () => {

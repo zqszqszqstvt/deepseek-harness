@@ -4757,7 +4757,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SpillOwner',
-    declaration: 'export interface SpillOwner {\n    sessionId: SessionId;\n}',
+    declaration: 'export interface SpillOwner {\n    sessionId: SessionId;\n    workspaceRoot?: string;\n}',
   },
   {
     name: 'SpillRef',
@@ -4889,7 +4889,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SubprocessSpawnSpec',
-    declaration: 'export interface SubprocessSpawnSpec {\n    argv: readonly string[];\n    cwd: string;\n    stdio: SubprocessStdio;\n    graceMs: number;\n    signal?: AbortSignal | undefined;\n    env?: NodeJS.ProcessEnv | undefined;\n}',
+    declaration: 'export interface SubprocessSpawnSpec {\n    argv: readonly string[];\n    cwd: string;\n    stdio: SubprocessStdio;\n    graceMs: number;\n    signal?: AbortSignal | undefined;\n    env?: NodeJS.ProcessEnv | undefined;\n    spillDir?: string | undefined;\n}',
   },
   {
     name: 'SubprocessStdinMode',

@@ -16,7 +16,7 @@ Server profile 还会在独立 bubblewrap 进程中运行模型编写的 `workfl
 
 浏览器 CORS 默认关闭。直接使用 Electron 测试客户端时，可以在可信测试网络中传入 `--cors-origin '*'`，也可以指定一个确切的 HTTP origin；仅由生产后端调用的部署不设置该选项。该开关只允许浏览器传输，不提供身份验证。
 
-默认项目继续映射到 `users/<sha256(userId)>/workspace`；每个具名项目映射到 `users/<sha256(userId)>/projects/<sha256(projectId)>/workspace`。Server 将每个 Agent 沙箱固定在对应项目工作区；交互式授权不能授予工作区外的访问权。文件系统读取与 `glob`/`grep` 搜索会拒绝工作区外目标，包括规范化后的符号链接逃逸。主机异常和 ApiProxy 失败的详情仅记入日志，HTTP 和终止 SSE 客户端只会收到稳定的通用错误，不会暴露主机路径。回合准入会串行化同一项目 Session，同时允许同一用户的其他项目独立使用全局并发池。
+默认项目继续映射到 `users/<sha256(userId)>/workspace`；每个具名项目映射到 `users/<sha256(userId)>/projects/<sha256(projectId)>/workspace`。Server 将每个 Agent 沙箱固定在对应项目工作区；交互式授权不能授予工作区外的访问权。文件系统读取与 `glob`/`grep` 搜索会拒绝工作区外目标，包括规范化后的符号链接逃逸。主机异常和 ApiProxy 失败的详情仅记入日志，HTTP 和终止 SSE 客户端只会收到稳定的通用错误，不会暴露主机路径。回合准入会串行化同一项目 Session，同时允许同一用户的其他项目独立使用全局并发池。云端 `shell` 调用的 `workdir` 会按沙箱所绑定的同一份逐调用策略根目录解析，并在任何 spawn 之前完成包含性校验，因此越权的绝对或相对目录会在工具内失败，而不是在 namespace 内部失败；本地 `workdir` 仍由已连接的执行器强制执行其物理边界，因为 Server 无法规范化远端设备上的路径。spill 产物——被截断命令的完整输出与过大的工具结果——写入所属项目工作区内的 `.dsh/spill` 之下，因此 Server 交给模型的每个路径都是该会话自身读取边界可以重新打开的。
 
 更改 `--data-dir` 时，若冷 Server Session 记录的工作目录严格符合 Server 自有的默认或具名项目布局，则保留该 Session。JSONL 后端会先重写持久化的工作目录并迁移制品，然后再由 ApiProxy 接管。活跃 Session、不相关的同 ID 制品和已占用的目标目录都会失败关闭。
 

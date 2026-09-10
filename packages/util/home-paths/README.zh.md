@@ -18,6 +18,10 @@ DeepSeek Harness 用户数据的共享文件系统路径辅助工具。
 
 `expandHomePath()` 使用操作系统主目录展开 `~`、`~/...` 和 Windows 风格的 `~\...` 前缀。它会保留非波浪号路径和 `~user/...` 原样不变。
 
+## 工作区产物路径
+
+`workspaceSpillRoot(workspaceRoot)` 解析出 `<workspace>/.dsh/spill`，即单个会话工作区内的 spill 目录：当部署把会话读取限制在该工作区内时必须使用这一位置，因为指向边界之外的定位信息是模型拿到却永远打不开的路径。`WORKSPACE_DSH_DIR_NAME` 是 `DSH_HOME_DIR_NAME` 在工作区内的 `.dsh` 对应物（它已经在 `<workspace>/.dsh/skills` 承载项目 skill），`WORKSPACE_SPILL_DIR_NAME` 则是 spill 子目录名。返回目录的创建、权限与保留均由调用方负责。
+
 ## 监听路径
 
 `canonicalizeWatchPath()` 为原生文件系统 watcher 提供一种稳定的目标路径表示。它通过 `fs.realpath()` 解析层级最深的现有祖先路径，再拼回缺失的后缀，因此即使文件或目录尚未创建也仍可监听。尤其是，Windows 8.3 别名不能与原生 watcher 后端发出的长路径混用。

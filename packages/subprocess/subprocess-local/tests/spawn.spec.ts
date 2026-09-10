@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -476,6 +476,47 @@ describe('output truncation and spill', () => {
     expect(result.stdout.truncated).toBe(true)
     expect(result.stdout.text).toContain('line-0200')
     expect(result.stdout.spillPath).toBeUndefined()
+  })
+
+  it('spills into the spec directory, creating it on demand', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-subprocess-spill-workspace-'))
+    const target = join(workspace, '.dsh', 'spill')
+    try {
+      const result = await finish(spawnSubprocess(
+        spec('for i in $(seq 1 200); do printf "line-%04d\\n" $i; done', {
+          stdoutMaxBytes: 500, stderrMaxBytes: 500, spillDir: target,
+        }),
+        // The caller's own directory wins over the runtime's private default.
+        { spillDir },
+      ))
+
+      expect(result.stdout.spillPath?.startsWith(target)).toBe(true)
+      expect(readFileSync(String(result.stdout.spillPath), 'utf8')).toContain('line-0001')
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the bounded tail when the spill directory cannot be created', async () => {
+    // A regular file where the directory belongs makes the on-demand creation
+    // fail. The failure happens inside a stream data listener, so it must
+    // degrade to the in-memory tail rather than escape as a host error.
+    const blocker = join(spillDir, `spill-blocker-${process.pid}`)
+    writeFileSync(blocker, 'not a directory')
+    try {
+      const result = await finish(spawnSubprocess(
+        spec('for i in $(seq 1 200); do printf "line-%04d\\n" $i; done', {
+          stdoutMaxBytes: 500, stderrMaxBytes: 500, spillDir: join(blocker, 'nested'),
+        }),
+      ))
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout.truncated).toBe(true)
+      expect(result.stdout.text).toContain('line-0200')
+      expect(result.stdout.spillPath).toBeUndefined()
+    } finally {
+      unlinkSync(blocker)
+    }
   })
 })
 

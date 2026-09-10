@@ -9,9 +9,9 @@
  * writes CRLF on Windows, so exact text assertions normalize line endings.
  */
 
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -251,6 +251,69 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.run', () => {
     expect(result.stdout.truncated).toBe(false)
     expect(result.stderr.truncated).toBe(true)
     expect(result.stderr.text.length).toBeLessThanOrEqual(100)
+  })
+
+  it('keeps a truncated command\'s spill file in the private directory by default', async () => {
+    const { bash } = await setup({ maxOutputBytes: 100 })
+    const result = await bash.run(bash.resolve({ command: '1..100 | ForEach-Object { "line-$_" }' }))
+
+    expect(result.stdout.truncated).toBe(true)
+    expect(String(result.stdout.spillPath).startsWith(spillDir)).toBe(true)
+  })
+
+  it('places the spill file inside the session workspace when so configured', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-pwsh-spill-workspace-'))
+    const { ctx, bash } = await setup({ maxOutputBytes: 100, spillPlacement: 'session-workspace' })
+    try {
+      const result = await bash.run(bash.resolve({
+        command: '1..100 | ForEach-Object { "line-$_" }',
+        sandboxPolicy: { mode: 'workspace-write', workspaceRoot: workspace },
+      }))
+
+      expect(result.stdout.truncated).toBe(true)
+      // The artifact is where the session's own read boundary can reopen it, and
+      // it holds the whole stream the in-memory tail dropped.
+      expect(samePath(dirname(String(result.stdout.spillPath)), join(workspace, '.dsh', 'spill'))).toBe(true)
+      expect(readFileSync(String(result.stdout.spillPath), 'utf8')).toContain('line-1')
+    } finally {
+      await ctx.fiber.dispose()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('falls back to the workdir when no sandbox policy stamped a root', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-pwsh-spill-workdir-'))
+    const { ctx, bash } = await setup({ maxOutputBytes: 100, spillPlacement: 'session-workspace' })
+    try {
+      const result = await bash.run(bash.resolve({
+        command: '1..100 | ForEach-Object { "line-$_" }',
+        workdir: workspace,
+      }))
+
+      expect(samePath(dirname(String(result.stdout.spillPath)), join(workspace, '.dsh', 'spill'))).toBe(true)
+    } finally {
+      await ctx.fiber.dispose()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the private spill directory under a read-only policy', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-pwsh-spill-readonly-'))
+    const { ctx, bash } = await setup({ maxOutputBytes: 100, spillPlacement: 'session-workspace' })
+    try {
+      const result = await bash.run(bash.resolve({
+        command: '1..100 | ForEach-Object { "line-$_" }',
+        sandboxPolicy: { mode: 'read-only', workspaceRoot: workspace },
+      }))
+
+      // read-only promises no workspace writes, and this artifact is the
+      // harness's own, so it stays in the private directory.
+      expect(String(result.stdout.spillPath).startsWith(spillDir)).toBe(true)
+      expect(existsSync(join(workspace, '.dsh'))).toBe(false)
+    } finally {
+      await ctx.fiber.dispose()
+      rmSync(workspace, { recursive: true, force: true })
+    }
   })
 
   it('per-call timeout takes precedence under the cap and kills on expiry', async () => {

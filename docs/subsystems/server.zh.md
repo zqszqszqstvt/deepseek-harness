@@ -14,7 +14,7 @@
 
 ## 信任边界
 
-Server 只把 `userId` 用作路由和隔离键，不将其视为身份认证。可信平台后端必须提供该值。Electron 授权本地根目录并强制执行物理路径边界；Server 不同步文件，也不会在本地错误后回退到云端执行。
+Server 只把 `userId` 用作路由和隔离键，不将其视为身份认证。可信平台后端必须提供该值。Electron 授权本地根目录并强制执行物理路径边界；Server 不同步文件，也不会在本地错误后回退到云端执行。云端 shell 调用的工作目录会在 spawn 之前被限制在会话工作区内，而 Server Session 交予路径的产物——被截断的命令输出与过大的工具结果——会 spill 到同一个工作区内部，因此模型收到的路径就是其自身读取边界可以重新打开的路径。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 

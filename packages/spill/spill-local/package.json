@@ -32,6 +32,7 @@
   ],
   "license": "MIT",
   "peerDependencies": {
+    "@deepseek-ai/dsh-home-paths": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-spill": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^"
@@ -41,6 +42,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/dsh-brand": "workspace:^",
+    "@deepseek-ai/dsh-home-paths": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@deepseek-ai/dsh-session": "workspace:^",

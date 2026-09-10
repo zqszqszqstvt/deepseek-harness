@@ -18,6 +18,7 @@
     maxOutputBytes: 64000      # per-stream in-memory cap; overflow spills to disk
     maxSpillBytes: 67108864    # per-stream full-output spill cap
     graceMs: 3000              # kill escalation and post-exit pipe-drain grace
+    spillPlacement: private    # 'private' | 'session-workspace': where a truncated run's spill file lands
 ```
 
 ## 行为
@@ -25,6 +26,7 @@
 - **每次调用都 spawn，不保留 shell 状态**：每次调用都启动新的非登录 `bash -c`，且不读取 rc 文件。
 - **组装条目是一层，而不是最终值**：当组装中存在 settings 提供方时，本执行器以上面的条目为 base 注册该能力的 [`bash` 命名空间](../shell/README.zh.md)，因此 `settings.yaml` 中的用户段会叠加其上，下一条命令即按新预算运行。schema 无法判定的值（正有限、`graceMs` 的定时器上界）会在写入时被拒绝，运行中的执行器保持它最后一份可用的段；没有提供方、或提供方脱离之后，运行的就是组装条目。
 - **在受管进程组之上应用配置预算**：`resolve()` 从配置补全 `workdir`／`timeoutMs`／`stdoutMaxBytes`，每次 spawn 都向服务传入显式的字节上限、spill 上限与 `graceMs`。该宽限期须为正有限值，且不得大于 [`MAX_TIMER_DELAY_MS`](../../util/timeout/README.zh.md)，这样 Node 就能用一个定时器表示它。进程组终止、退出后管道排空、尾部保留与有界 spill 文件是 [`dsh-subprocess-local`](../../subprocess/subprocess-local/README.zh.md) 的机制。前台 `ShellExecRequest.stdoutMaxBytes` 可为某个受信任调用方提高单次 stdout 捕获预算；stderr 和后台运行仍使用 `maxOutputBytes`。
+- **spill 落点跟随会话的读取边界**——配置 `spillPlacement: session-workspace` 时，被截断命令的完整输出 spill 文件会落在 `<workspace>/.dsh/spill` 下（取已解析的沙箱策略根目录，否则取该命令自身的工作目录），而不是子进程服务的宿主私有目录，因此本执行器报告的 `spillPath` 对被限制在该工作区内的会话是可以重新打开的。`read-only` 策略仍使用私有目录：该模式承诺不写入工作区，而这个产物属于 harness 自身，而不属于受限子进程。spill 目录不可写时降级为有界的内存尾部输出，而不是让本次运行失败（见[工作区内 spill 产物 Agent Note](../../../.agents/notes/implemented/feature/2026-09-09-workspace-placed-spill-artifacts.zh.md)）。
 - **超时与取消分类**：`run()` 通过同一个 deadline 把经配置钳位的超时与调用方的信号融合；只有执行器自身的超时报告 `timedOut`，上游取消报告 `aborted`，自身因信号终止的命令两者皆不报告（见[超时库 Agent Note](../../../.agents/notes/implemented/architecture/2026-07-06-timeout-deadline-library.zh.md)）。
 - **适合模型的终端环境**：`NO_COLOR=1 TERM=dumb PAGER=cat GIT_PAGER=cat` 防止分页器与 ANSI 颜色破坏结果。这些值作为普通 env 合并，遵循服务的凭据清除与 `DSH_*` 通道规则；调用方的显式条目依旧优先。详见 [stdin/env Agent Note](../../../.agents/notes/implemented/architecture/2026-06-30-bash-stdin-env-trusted-plugin-api.zh.md) 与 [受管环境 Agent Note](../../../.agents/notes/implemented/feature/2026-07-10-agent-session-identity-and-log-location.zh.md)。
 - **后台进程**：`start()` 会立即返回活动的 `ShellProcess` 句柄且不应用超时；`readOutput()` 把基于偏移量的 stdout/stderr 读取合并为一条消费式增量，并在存在 stderr 时将其置于 `[stderr]` 标记下。运行中的进程属于 subprocess 服务，可在执行器重载后存活，并在服务 dispose 时被终止且等待退出。job id、所有权、轮询和通知属于通用 [`ctx.jobs` 运行时](../../jobs/jobs/README.zh.md)，工具层会在其中注册该句柄。

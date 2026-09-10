@@ -11,6 +11,7 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { workspaceSpillRoot } from '@deepseek-ai/dsh-home-paths'
 import { SHELL_SETTINGS_NAMESPACE, ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellProcessRead, ShellRunResult, CollectedOutput } from '@deepseek-ai/dsh-shell'
 import type { SubprocessCollect, SubprocessHandle, SubprocessOutputReader, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
@@ -37,6 +38,13 @@ const DEFAULT_GRACE_MS = 3_000
 /** Default per-stream spill cap (the `maxSpillBytes` config). */
 const DEFAULT_MAX_SPILL_BYTES = 64 * 1024 * 1024
 
+/**
+ * Where one command's full-stream spill file lives: `private` leaves it to the
+ * subprocess runtime's host-private default; `session-workspace` keeps it inside
+ * the session's own workspace.
+ */
+export type SpillPlacement = 'private' | 'session-workspace'
+
 /** Plugin config (all optional — `static Config` supplies the defaults). */
 export interface Config {
   /** Default working directory for commands (default: process.cwd()). */
@@ -51,6 +59,13 @@ export interface Config {
   maxSpillBytes?: number
   /** Grace period for kill escalation and inherited pipes; at most `MAX_TIMER_DELAY_MS`. */
   graceMs?: number
+  /**
+   * Where a truncated command's spill file lands. `session-workspace` is the
+   * placement a deployment whose session reads are confined to the workspace
+   * needs, so the `spillPath` this executor reports is one the model can reopen;
+   * `private` keeps the host-private default a local deployment can read anyway.
+   */
+  spillPlacement?: SpillPlacement
 }
 
 /** The shape after schemastery applied the defaults (cwd has none). */
@@ -109,6 +124,7 @@ export class LocalBashExecutor extends ShellExecutor {
     maxOutputBytes: z.number().default(64_000),
     maxSpillBytes: z.number().default(DEFAULT_MAX_SPILL_BYTES),
     graceMs: z.number().default(DEFAULT_GRACE_MS),
+    spillPlacement: z.union(['private', 'session-workspace'] as const).default('private'),
   })
 
   /** The currently authoritative config: the settings section, or the composition entry. */
@@ -163,9 +179,9 @@ export class LocalBashExecutor extends ShellExecutor {
       ...request.stdin !== undefined ? { stdin: request.stdin } : {},
       ...request.env !== undefined ? { env: request.env } : {},
       ...request.dshEnv !== undefined ? { dshEnv: request.dshEnv } : {},
-      // Carry a sandbox policy through verbatim: this executor never
-      // confines, so the field is inert here (the seam contract) — a
-      // sandboxing subclass overrides resolve() to stamp its default instead.
+      // Carry a sandbox policy through verbatim: this executor never confines
+      // (a sandboxing subclass overrides resolve() to stamp its default), but it
+      // does read the policy's mode and root to place spill artifacts.
       sandboxPolicy: request.sandboxPolicy,
     }
   }
@@ -180,6 +196,7 @@ export class LocalBashExecutor extends ShellExecutor {
   ): SubprocessSpawnSpec {
     const collect = (maxBytes: number): SubprocessCollect =>
       ({ maxBytes, spill: { maxBytes: this.config.maxSpillBytes } })
+    const spillDir = this.spillDirectory(spec)
     return {
       argv,
       cwd: spec.workdir,
@@ -194,7 +211,26 @@ export class LocalBashExecutor extends ShellExecutor {
       // snapshot beats both the caller's env and the terminal overrides; the
       // subprocess service merges the whole map after its ambient scrub.
       env: { ...ENV_OVERRIDES, ...spec.env, ...spec.dshEnv },
+      ...(spillDir === undefined ? {} : { spillDir }),
     }
+  }
+
+  /**
+   * The directory this command's spill files land in, or `undefined` for the
+   * subprocess runtime's private default. `session-workspace` derives it from
+   * the same per-call identity that confines the command — the policy root when
+   * a sandbox stamped one, else the command's own workdir — so the reported
+   * `spillPath` stays inside the session's read boundary. A `read-only` policy
+   * keeps the private default: that mode promises no workspace writes, and this
+   * artifact is written by the harness rather than by the confined child.
+   * @param spec - the resolved spec carrying the workdir and any sandbox policy.
+   * @returns the absolute spill directory, or `undefined` for the runtime default.
+   */
+  private spillDirectory(spec: ShellExecSpec): string | undefined {
+    if (this.config.spillPlacement !== 'session-workspace') return undefined
+    const policy = spec.sandboxPolicy
+    if (policy?.mode === 'read-only') return undefined
+    return workspaceSpillRoot(policy?.workspaceRoot ?? spec.workdir)
   }
 
   /** The collect-mode readers the executor itself requested (present by construction). */
