@@ -71,6 +71,41 @@ else
 fi
 echo "== package manager: $PKG =="
 
+# npm's and pnpm's CLIs are scripts with a `#!/usr/bin/env node` shebang, and
+# sudo's secure_path usually omits /usr/local/bin, so a bare /usr/local/bin/npm
+# dies with "env: 'node': No such file or directory". Always put the contract
+# directory on PATH for them.
+kit_npm() { env PATH="/usr/local/bin:$PATH" /usr/local/bin/npm "$@"; }
+kit_pnpm() { env PATH="/usr/local/bin:$PATH" /usr/local/bin/pnpm "$@"; }
+
+# Every path the contract names must exist when this script returns, so a step
+# that died halfway (a failed download, a protected vendor tree) cannot leave a
+# deployment that looks installed and silently is not.
+contract_summary() {
+  local missing=0 target
+  echo "== contract summary =="
+  local required="/usr/local/bin/python3 /usr/local/bin/uv /etc/uv/uv.toml $SKILL_ROOT/runtime-env/SKILL.md"
+  if [ "$WITH_NODE" -eq 1 ]; then
+    required="$required /usr/local/bin/node /usr/local/bin/npm"
+  fi
+  for target in $required; do
+    if [ -e "$target" ]; then
+      printf "   ok      %s\n" "$target"
+    else
+      printf "   MISSING %s\n" "$target"
+      missing=1
+    fi
+  done
+  if [ "$WITH_NODE" -eq 1 ] && [ "$WITH_PNPM" -eq 1 ] && [ ! -x /usr/local/bin/pnpm ]; then
+    echo "   note    /usr/local/bin/pnpm absent (npm is still usable)"
+  fi
+  if [ "$missing" -ne 0 ]; then
+    echo "install-host.sh: the contract is INCOMPLETE — fix the MISSING lines above" >&2
+    return 1
+  fi
+  return 0
+}
+
 pkg_install() {  # best-effort: a missing optional package must not abort
   case "$PKG" in
     apt) apt-get install -y --no-install-recommends "$@" >/dev/null ;;
@@ -142,7 +177,7 @@ if [ ! -x /usr/local/bin/uv ]; then
   curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh
 fi
 chmod 0755 /usr/local/bin/uv /usr/local/bin/uvx 2>/dev/null || true
-/usr/local/bin/uv --version
+/usr/local/bin/uv --version 2>/dev/null || echo "   note: uv did not report a version"
 
 echo "== 3b. node at /usr/local/bin/node =="
 # Same rule as Python: an agent can only run what lives under a bound prefix, so
@@ -174,13 +209,18 @@ for row in json.load(sys.stdin):
   # /usr/local, which is where npm then expects its global prefix.
   tar -xJf "/tmp/$NODE_TARBALL" -C /usr/local --strip-components=1
   rm -f "/tmp/$NODE_TARBALL"
-  printf '   node %s, npm %s\n' "$(/usr/local/bin/node -v)" "$(/usr/local/bin/npm -v)"
+  printf '   node %s, npm %s\n' "$(/usr/local/bin/node -v 2>/dev/null || echo unknown)" \
+    "$(kit_npm -v 2>/dev/null || echo unknown)"
 fi
 if [ "$WITH_NODE" -eq 1 ] && [ "$WITH_PNPM" -eq 1 ] && [ ! -x /usr/local/bin/pnpm ]; then
   # Installed BEFORE the read-only lock: a global install from inside a session
-  # would fail EROFS, which is exactly what the contract tells the model.
-  /usr/local/bin/npm install -g "pnpm@$PNPM_VERSION" >/dev/null
-  printf '   pnpm %s\n' "$(/usr/local/bin/pnpm -v)"
+  # would fail EROFS, which is exactly what the contract tells the model. A
+  # failure here must not abort the install — node and npm are already usable.
+  if kit_npm install -g "pnpm@$PNPM_VERSION" >/dev/null 2>&1; then
+    printf '   pnpm %s\n' "$(kit_pnpm -v 2>/dev/null || echo unknown)"
+  else
+    echo "   note: pnpm@$PNPM_VERSION did not install; agents can still use npm"
+  fi
 fi
 
 echo "== 4. optional index config under /etc =="
@@ -273,6 +313,8 @@ if [ -z "$SERVICE_USER" ]; then
   echo "   and export these before starting the Server:"
   echo "     DSH_BUNDLED_SKILL_DIR=$SKILL_ROOT  UV_PYTHON_DOWNLOADS=never"
   echo
+  contract_summary || exit 1
+
   echo "== next steps =="
   echo "  1. $HERE/verify.sh --bwrap-probe        # must be all ok"
   echo "  2. capacity: a quota on the data volume, and workspace-gc.sh nightly"
@@ -315,6 +357,8 @@ else
 fi
 
 echo
+contract_summary || exit 1
+
 echo "== next steps =="
 echo "  1. $HERE/verify.sh --bwrap-probe        # must be all ok"
 echo "  2. capacity: a quota on $DATA_DIR, and workspace-gc.sh nightly"

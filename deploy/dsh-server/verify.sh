@@ -108,7 +108,7 @@ if [ -x /usr/local/bin/node ]; then
   ok "/usr/local/bin/node $(/usr/local/bin/node -v)"
   for tool in npm npx pnpm; do
     if [ -x "/usr/local/bin/$tool" ]; then
-      ok "/usr/local/bin/$tool $("/usr/local/bin/$tool" -v 2>/dev/null | head -1)"
+      ok "/usr/local/bin/$tool $(env PATH="/usr/local/bin:$PATH" "/usr/local/bin/$tool" -v 2>/dev/null | head -1)"
     else
       warn "/usr/local/bin/$tool absent — agents cannot use it in a session"
     fi

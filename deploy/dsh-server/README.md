@@ -33,7 +33,7 @@ Three mechanisms decide the layout, and each one has a failure mode that looks l
 
 ## Install on a Linux host
 
-Use this path when `dsh server` already runs on a VM or bare host — it is the shorter one, because bubblewrap then needs no extra container privileges. The script is idempotent, detects the package manager (apt on Debian/Ubuntu, dnf or yum on RHEL, Rocky, Alma, Fedora, Amazon Linux), installs the same directories the image contains, writes the systemd unit, and stops with a clear error when the interpreter cannot be provided. Node.js LTS is fetched into `/usr/local` with pnpm beside it; `--node-version 24.19.0`, `--no-node`, `--no-pnpm`, and `--pnpm-version` change that.
+Use this path when `dsh server` already runs on a VM or bare host — it is the shorter one, because bubblewrap then needs no extra container privileges. The script is idempotent, detects the package manager (apt on Debian/Ubuntu, dnf or yum on RHEL, Rocky, Alma, Fedora, Amazon Linux), installs the same directories the image contains, writes the systemd unit, and stops with a clear error when the interpreter cannot be provided. Node.js LTS is fetched into `/usr/local` with pnpm beside it; `--node-version 24.19.0`, `--no-node`, `--no-pnpm`, and `--pnpm-version` change that. Run the installer with sudo: it invokes `npm` and `pnpm` with `/usr/local/bin` explicitly on PATH, because sudo's `secure_path` omits that directory and their `#!/usr/bin/env node` shebang would otherwise fail. It ends with a contract summary that fails the run when any contracted path is missing, so a half-finished install cannot pass for a working one.
 
 ```bash
 sudo ./install-host.sh --data-dir /var/lib/dsh/server-data

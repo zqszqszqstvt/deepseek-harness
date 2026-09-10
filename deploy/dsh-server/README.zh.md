@@ -33,7 +33,7 @@ agent 需要触达的每个路径都必须位于 strict profile 会绑定的前�
 
 ## 在 Linux 宿主上安装
 
-当 `dsh server` 已经跑在虚拟机或裸机上时走这条路径——它更短，因为 bubblewrap 此时不需要任何额外的容器特权。脚本是幂等的，会自动识别包管理器（Debian/Ubuntu 用 apt，RHEL、Rocky、Alma、Fedora、Amazon Linux 用 dnf 或 yum），安装与镜像相同的目录布局，写出 systemd unit，并在无法提供解释器时以明确错误停下。Node.js LTS 会被取到 `/usr/local` 并在旁边装上 pnpm；`--node-version 24.19.0`、`--no-node`、`--no-pnpm`、`--pnpm-version` 可以改变这一行为。
+当 `dsh server` 已经跑在虚拟机或裸机上时走这条路径——它更短，因为 bubblewrap 此时不需要任何额外的容器特权。脚本是幂等的，会自动识别包管理器（Debian/Ubuntu 用 apt，RHEL、Rocky、Alma、Fedora、Amazon Linux 用 dnf 或 yum），安装与镜像相同的目录布局，写出 systemd unit，并在无法提供解释器时以明确错误停下。Node.js LTS 会被取到 `/usr/local` 并在旁边装上 pnpm；`--node-version 24.19.0`、`--no-node`、`--no-pnpm`、`--pnpm-version` 可以改变这一行为。用 sudo 运行安装器：它调用 `npm` 与 `pnpm` 时会显式把 `/usr/local/bin` 放进 PATH，因为 sudo 的 `secure_path` 不含该目录，否则它们的 `#!/usr/bin/env node` shebang 会失败。脚本最后打印一份契约清单，任何契约路径缺失都会让本次运行以失败结束，因此装了一半的状态不会被当成可用。
 
 ```bash
 sudo ./install-host.sh --data-dir /var/lib/dsh/server-data
