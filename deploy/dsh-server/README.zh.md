@@ -12,8 +12,9 @@ agent 需要触达的每个路径都必须位于 strict profile 会绑定的前�
 | --- | --- | --- | --- |
 | `/usr/local/bin/python3` | 共享解释器：软链到已安装的、带 `venv` 与 `ensurepip` 且版本满足 `uv` 要求的最新解释器 | 只读 | 发行版软件包；真正的保证来自绑定挂载，而不是权限位 |
 | `/usr/local/bin/uv`、`/usr/local/bin/uvx` | 共享安装器/解析器 | 只读 | `root:root 0755` |
+| `/usr/local/bin/node`、`npm`、`npx`、`pnpm` | 共享 Node.js LTS 及其包管理器 | 只读 | `root:root`，在加锁之前安装 |
 | `/etc/pip.conf`、`/etc/uv/uv.toml` | 可选的源配置；缺失即使用公网源 | 只读 | `root:root 0644`，不含凭据 |
-| `/usr/local/share/dsh/skills/python-env/SKILL.md` | 面向模型的命令模板 | 不需要：宿主侧读取 | `root:root`、`a-w` |
+| `/usr/local/share/dsh/skills/runtime-env/SKILL.md` | 面向模型的命令模板 | 不需要：宿主侧读取 | `root:root`、`a-w` |
 | `/var/lib/dsh`（`DSH_HOME`） | `cordis.patch.yml`、profile、凭据 | 不可见 | `dsh:dsh 0700` |
 | `/var/lib/dsh/server-data`（`--data-dir`） | 所有用户的工作区 | 仅本次调用会话自己的子树 | `dsh:dsh 0700` |
 | `<workspace>/.venv`、`<workspace>/.cache`、`<workspace>/.pylibs` | 该用户可写的环境 | 可读写 | 服务 uid |
@@ -27,12 +28,12 @@ agent 需要触达的每个路径都必须位于 strict profile 会绑定的前�
 布局由三个机制决定，每个机制都有一种"看起来像 bug、其实是契约"的失败形态。
 
 - **要么可见，要么不存在。** strict profile 从空根开始（`--tmpfs /` 再 `--remount-ro /`），所以放在 `/opt/conda` 或服务用户 home 下的工具链不只是被禁止——它根本不存在，引用它的命令会以 ENOENT 失败。这就是解释器与 `uv` 必须进 `/usr/local`、镜像源必须进 `/etc` 的原因。
-- **共享只读，用户可写。** 让共享层敢于暴露的是挂载而不是权限位：strict profile 对 `/usr` 做 ro-bind，所以在会话内每个用户往系统 site-packages 里 `pip install`、往 base 里 `conda install` 都会得到 EROFS，谁都改不了别人 agent 会 import 的东西。宿主侧的加锁属于纵深防御，而且必须收窄，因为对整个 `/usr/local` 做 `chmod -R a-w` 会在那些连 root 都拒绝的厂商目录上中断——`/usr/local/aegis` 下的阿里云云盾就是一例——所以 `install-host.sh` 只锁它自己装的文件，并把 `--lock-all` 与 `--no-lock` 作为显式选项。每个会话的包住在自己工作区的 `.venv` 里，而 strict bubblewrap 每次调用只绑定一个工作区，所以用户 A 既读不到也写不到用户 B 的环境。
+- **共享只读，用户可写。** 让共享层敢于暴露的是挂载而不是权限位：strict profile 对 `/usr` 做 ro-bind，所以在会话内每个用户往系统 site-packages 里 `pip install`、往 base 里 `conda install` 都会得到 EROFS，谁都改不了别人 agent 会 import 的东西。宿主侧的加锁属于纵深防御，而且必须收窄，因为对整个 `/usr/local` 做 `chmod -R a-w` 会在那些连 root 都拒绝的厂商目录上中断——`/usr/local/aegis` 下的阿里云云盾就是一例——所以 `install-host.sh` 只锁它自己装的文件，并把 `--lock-all` 与 `--no-lock` 作为显式选项。每个会话的包住在自己工作区的 `.venv` 里，而 strict bubblewrap 每次调用只绑定一个工作区，所以用户 A 既读不到也写不到用户 B 的环境。Node.js 以同样的条件、同样的理由加入共享层：住在 `$HOME`（nvm 的默认位置）或 `/opt` 下的运行时在每个会话里都不可见，所以安装器把 node、npm、npx、pnpm 放进 `/usr/local`。这样 `npm install -g` 的目标就是 `/usr/local`，在会话内得到 EROFS；而每个包管理器的缓存默认值（`~/.npm`、`~/.local/share/pnpm`、`~/.cache/pip`、`~/.cache/uv`）都指向一个并不存在的 `$HOME`，这正是契约要求在同一条命令里把每个缓存重定向进工作区的原因。
 - **宿主侧根目录是投递指令的唯一途径。** Server 会话把进程内读取围栏限定在工作区（`fs-sandbox` + `strictReads`），这会静默废掉 CLI 或桌面部署惯用的两个位置：`$DSH_HOME/AGENTS.md` 经 `ctx.fs` 探测后返回 unavailable，被直接跳过且没有任何诊断；`$DSH_HOME/skills` 与 `$DSH_AGENTS_HOME/skills` 被当作不存在，因为 skill provider 把 `FS_SANDBOX_DENIED` 映射成路径缺失。bundled skill 根是例外——它用宿主文件系统调用加载并被标记为可信——这正是 `DSH_BUNDLED_SKILL_DIR` 暴露的东西。常驻文案改走 `system-prompt.persona`，base 组合刻意把这一行留给部署填写。
 
 ## 在 Linux 宿主上安装
 
-当 `dsh server` 已经跑在虚拟机或裸机上时走这条路径——它更短，因为 bubblewrap 此时不需要任何额外的容器特权。脚本是幂等的，会自动识别包管理器（Debian/Ubuntu 用 apt，RHEL、Rocky、Alma、Fedora、Amazon Linux 用 dnf 或 yum），安装与镜像相同的目录布局，写出 systemd unit，并在无法提供解释器时以明确错误停下。
+当 `dsh server` 已经跑在虚拟机或裸机上时走这条路径——它更短，因为 bubblewrap 此时不需要任何额外的容器特权。脚本是幂等的，会自动识别包管理器（Debian/Ubuntu 用 apt，RHEL、Rocky、Alma、Fedora、Amazon Linux 用 dnf 或 yum），安装与镜像相同的目录布局，写出 systemd unit，并在无法提供解释器时以明确错误停下。Node.js LTS 会被取到 `/usr/local` 并在旁边装上 pnpm；`--node-version 24.19.0`、`--no-node`、`--no-pnpm`、`--pnpm-version` 可以改变这一行为。
 
 ```bash
 sudo ./install-host.sh --data-dir /var/lib/dsh/server-data

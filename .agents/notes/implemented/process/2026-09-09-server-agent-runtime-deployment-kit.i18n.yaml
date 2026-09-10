@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-09-09-server-agent-runtime-deployment-kit.md
-2026-09-09-server-agent-runtime-deployment-kit.md: 696837a2e68bfe4a23a492e381ff80ad002d422f
-2026-09-09-server-agent-runtime-deployment-kit.zh.md: bd19e7c905954219e9756c5b2024e2ef321586dd
+2026-09-09-server-agent-runtime-deployment-kit.md: d39dc66f77939ff3dd028af60dbc63634ccc3b5e
+2026-09-09-server-agent-runtime-deployment-kit.zh.md: c65572a6eee5c321087efaacd832163f1564c59e

@@ -4,7 +4,8 @@
 # Idempotent: re-running it only repairs what is missing. Requires root.
 #
 #   sudo ./install-host.sh [--data-dir DIR] [--dsh-home DIR] [--no-systemd]
-#                          [--no-service-user] [--no-lock]
+#                          [--no-service-user] [--no-lock] [--no-node]
+#                          [--node-version 24.19.0|lts22] [--no-pnpm] [--pnpm-version V]
 #
 # --no-service-user skips the service user, the data directories, the deployment
 # patch, and the unit: use it when the Server is started by hand (for example
@@ -16,7 +17,7 @@
 # either way, because the strict profile ro-binds it.
 #
 # It installs the same layout the Dockerfile produces, so verify.sh accepts both:
-#   python3 (distribution), /usr/local/bin/uv        shared, read-only
+#   /usr/local/bin/python3, uv, node, npm, pnpm      shared, read-only
 #   /etc/pip.conf, /etc/uv/uv.toml                   optional index config
 #   /usr/local/share/dsh/skills                      DSH_BUNDLED_SKILL_DIR
 #   /var/lib/dsh                                     DSH_HOME (invisible to agents)
@@ -31,6 +32,10 @@ SERVICE_UID=10001
 SKILL_ROOT=/usr/local/share/dsh/skills
 WITH_SYSTEMD=1
 WITH_LOCK=0   # 0 = kit files only (default), 1 = all of /usr/local, 2 = none
+NODE_VERSION=lts22          # an exact version (24.19.0) or lts22 to resolve the newest 22.x
+WITH_NODE=1
+WITH_PNPM=1
+PNPM_VERSION=11.7.0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -39,6 +44,10 @@ while [ $# -gt 0 ]; do
     --no-systemd) WITH_SYSTEMD=0; shift ;;
     --no-service-user) SERVICE_USER=""; shift ;;
     --no-lock) WITH_LOCK=2; shift ;;
+    --no-node) WITH_NODE=0; shift ;;
+    --no-pnpm) WITH_PNPM=0; shift ;;
+    --node-version) NODE_VERSION="${2:?}"; shift 2 ;;
+    --pnpm-version) PNPM_VERSION="${2:?}"; shift 2 ;;
     --lock-all) WITH_LOCK=1; shift ;;
     -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -124,10 +133,8 @@ fi
 # lineage). /usr/local/bin is ro-bound like the rest of /usr, so the symlink is
 # visible to every session and cannot be modified from inside one.
 ln -sfn "$PY_BIN" /usr/local/bin/python3
-printf '   contract path /usr/local/bin/python3 -> %s
-' "$PY_BIN"
-printf '   %s
-' "$(/usr/local/bin/python3 -VV 2>&1 | head -1)"
+printf '   contract path /usr/local/bin/python3 -> %s\n' "$PY_BIN"
+printf '   %s\n' "$(/usr/local/bin/python3 -VV 2>&1 | head -1)"
 /usr/local/bin/python3 -c 'import ensurepip, venv; print("   venv+ensurepip ok")'
 
 echo "== 3. uv at /usr/local/bin/uv =="
@@ -136,6 +143,45 @@ if [ ! -x /usr/local/bin/uv ]; then
 fi
 chmod 0755 /usr/local/bin/uv /usr/local/bin/uvx 2>/dev/null || true
 /usr/local/bin/uv --version
+
+echo "== 3b. node at /usr/local/bin/node =="
+# Same rule as Python: an agent can only run what lives under a bound prefix, so
+# a node installed under $HOME (nvm) or /opt is invisible inside every session.
+if [ "$WITH_NODE" -eq 0 ]; then
+  echo "   SKIPPED (--no-node): agents cannot run node, npm, or pnpm in a session"
+elif [ -x /usr/local/bin/node ]; then
+  printf '   already present: %s\n' "$(/usr/local/bin/node -v)"
+else
+  case "$NODE_VERSION" in
+    lts22|lts|'')
+      NODE_VERSION="$(curl -fsSL https://nodejs.org/dist/index.json         | /usr/local/bin/python3 -c 'import json,sys
+for row in json.load(sys.stdin):
+    if row["version"].startswith("v22."):
+        print(row["version"][1:]); break')" || true
+      [ -n "${NODE_VERSION:-}" ] || { echo "   FAIL: could not resolve the newest 22.x; pass --node-version X.Y.Z" >&2; exit 1; }
+      ;;
+    *) NODE_VERSION="${NODE_VERSION#v}" ;;
+  esac
+  case "$(uname -m)" in
+    x86_64) NODE_ARCH=x64 ;;
+    aarch64|arm64) NODE_ARCH=arm64 ;;
+    *) echo "   FAIL: unsupported architecture $(uname -m); install node under /usr/local yourself" >&2; exit 1 ;;
+  esac
+  NODE_TARBALL="node-v$NODE_VERSION-linux-$NODE_ARCH.tar.xz"
+  echo "   fetching $NODE_TARBALL"
+  curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/$NODE_TARBALL" -o "/tmp/$NODE_TARBALL"
+  # --strip-components=1 lands bin/, lib/node_modules, include/, share/ directly in
+  # /usr/local, which is where npm then expects its global prefix.
+  tar -xJf "/tmp/$NODE_TARBALL" -C /usr/local --strip-components=1
+  rm -f "/tmp/$NODE_TARBALL"
+  printf '   node %s, npm %s\n' "$(/usr/local/bin/node -v)" "$(/usr/local/bin/npm -v)"
+fi
+if [ "$WITH_NODE" -eq 1 ] && [ "$WITH_PNPM" -eq 1 ] && [ ! -x /usr/local/bin/pnpm ]; then
+  # Installed BEFORE the read-only lock: a global install from inside a session
+  # would fail EROFS, which is exactly what the contract tells the model.
+  /usr/local/bin/npm install -g "pnpm@$PNPM_VERSION" >/dev/null
+  printf '   pnpm %s\n' "$(/usr/local/bin/pnpm -v)"
+fi
 
 echo "== 4. optional index config under /etc =="
 # Both files are mirror-free by default: agents install from the public index.
@@ -148,6 +194,9 @@ install -m 0644 "$HERE/uv.toml" /etc/uv/uv.toml
 
 echo "== 5. contract skill at $SKILL_ROOT =="
 install -d -m 0755 "$SKILL_ROOT"
+# A renamed kit skill must not survive beside its replacement, or a session sees
+# two skills for the same contract.
+rm -rf "$SKILL_ROOT/python-env"
 cp -r "$HERE/skills/." "$SKILL_ROOT/"
 chmod -R a-w "$SKILL_ROOT"
 
@@ -163,7 +212,9 @@ echo "== 6. harden the files this kit installed =="
 # blanket chmod under `set -e` aborts the install halfway. Pass --lock-all only
 # on a host you know has no such tree.
 KIT_OWN_PATHS=(/usr/local/bin/uv /usr/local/bin/uvx /usr/local/share/dsh
-               /etc/pip.conf /etc/uv/uv.toml)
+               /etc/pip.conf /etc/uv/uv.toml
+               /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
+               /usr/local/bin/pnpm /usr/local/lib/node_modules)
 # A container image installs the interpreter itself, so its real files are ours
 # too. On a host install /usr/local/bin/python3 is a symlink into /usr, which the
 # ro-bind already protects: locking it would chmod the distribution's file.

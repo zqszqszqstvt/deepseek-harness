@@ -26,10 +26,19 @@ bad()  { printf '  FAIL  %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
 warn() { printf '  warn  %s\n' "$1"; }
 check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 
-PYTHON=python3
+PYTHON=/usr/local/bin/python3
 UV=/usr/local/bin/uv
 SKILL_ROOT="${DSH_BUNDLED_SKILL_DIR:-/usr/local/share/dsh/skills}"
-DSH_HOME_DIR="${DSH_HOME:-$HOME/.dsh}"
+
+# Run this WITHOUT sudo, as the user that starts dsh server: these checks read
+# that user's DSH_HOME and environment. Under sudo, $HOME is /root, so the
+# deployment patch and the data directory would be looked for in the wrong home.
+RUN_HOME="$HOME"
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != root ]; then
+  RUN_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  echo "note: running under sudo; using $SUDO_USER's home ($RUN_HOME) for DSH_HOME defaults"
+fi
+DSH_HOME_DIR="${DSH_HOME:-$RUN_HOME/.dsh}"
 DATA_DIR="${DSH_DATA_DIR:-$DSH_HOME_DIR/server-data}"
 
 echo "== 1. sandbox runtime =="
@@ -60,12 +69,20 @@ if command -v getenforce >/dev/null 2>&1; then
 fi
 
 echo "== 2. shared read-only layer =="
-check "$PYTHON on PATH" "command -v $PYTHON"
-check "$PYTHON reports a version" "$PYTHON -V"
-printf '  info  %s -> %s
-' "$PYTHON" "$(command -v "$PYTHON" 2>/dev/null)"
-check "$PYTHON has venv + ensurepip (Debian splits these out)" \
-  "$PYTHON -c 'import ensurepip, venv'"
+check "$PYTHON exists — the contract path the persona and the skill name" "test -x $PYTHON"
+check "$PYTHON has venv + ensurepip" "$PYTHON -c 'import ensurepip, venv'"
+check "$PYTHON is >= 3.8 (uv refuses older)"   "$PYTHON -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)'"
+printf '  info  %s -> %s\n' "$PYTHON" "$(readlink -f "$PYTHON" 2>/dev/null)"
+printf '  info  %s\n' "$("$PYTHON" -VV 2>&1 | head -1)"
+# Bare `python3` follows the PATH of whoever started the Server. A shell with
+# conda activated resolves it into $HOME, which does not exist inside a session,
+# so the contract names the absolute path instead. Report the difference.
+if command -v python3 >/dev/null 2>&1; then
+  bare="$(command -v python3)"
+  if [ "$(readlink -f "$bare")" != "$(readlink -f "$PYTHON")" ]; then
+    warn "bare python3 is $bare ($("$bare" -V 2>&1)) — invisible or different inside the sandbox"
+  fi
+fi
 check "$UV executable" "$UV --version"
 check "/usr/local/bin/uvx present" 'test -x /usr/local/bin/uvx'
 if [ -f /etc/pip.conf ]; then ok "/etc/pip.conf present"; else warn "/etc/pip.conf absent — pip uses the public index"; fi
@@ -86,10 +103,25 @@ else
   ok "kit-owned shared files are not group/world writable"
 fi
 
+echo "== 2b. shared node layer =="
+if [ -x /usr/local/bin/node ]; then
+  ok "/usr/local/bin/node $(/usr/local/bin/node -v)"
+  for tool in npm npx pnpm; do
+    if [ -x "/usr/local/bin/$tool" ]; then
+      ok "/usr/local/bin/$tool $("/usr/local/bin/$tool" -v 2>/dev/null | head -1)"
+    else
+      warn "/usr/local/bin/$tool absent — agents cannot use it in a session"
+    fi
+  done
+else
+  warn "/usr/local/bin/node absent — agents cannot run node, npm, or pnpm in a session"
+  warn "a node under \$HOME (nvm) or /opt is invisible: the sandbox binds only /usr, /bin, /sbin, /lib*, /etc, /run"
+fi
+
 echo "== 3. contract skill (bundled root) =="
-check "$SKILL_ROOT/python-env/SKILL.md exists" "test -f '$SKILL_ROOT/python-env/SKILL.md'"
-check "skill has frontmatter name" "grep -q '^name: python-env' '$SKILL_ROOT/python-env/SKILL.md'"
-check "skill has frontmatter description" "grep -q '^description: ' '$SKILL_ROOT/python-env/SKILL.md'"
+check "$SKILL_ROOT/runtime-env/SKILL.md exists" "test -f '$SKILL_ROOT/runtime-env/SKILL.md'"
+check "skill has frontmatter name" "grep -q '^name: runtime-env' '$SKILL_ROOT/runtime-env/SKILL.md'"
+check "skill has frontmatter description" "grep -q '^description: ' '$SKILL_ROOT/runtime-env/SKILL.md'"
 if [ -n "${DSH_BUNDLED_SKILL_DIR:-}" ]; then
   ok "DSH_BUNDLED_SKILL_DIR=$DSH_BUNDLED_SKILL_DIR"
 else
@@ -111,14 +143,34 @@ PATCH="$DSH_HOME_DIR/cordis.patch.yml"
 check "$PATCH exists" "test -f '$PATCH'"
 check "patch overrides system-prompt" "grep -q 'id: system-prompt' '$PATCH'"
 check "patch sets a persona" "grep -q 'persona:' '$PATCH'"
-if grep -q '{{' "$PATCH" 2>/dev/null; then
-  bad "persona contains '{{' — strict interpolation throws at assembly"
+# Only the persona VALUE is a template; comments elsewhere in the patch may
+# legitimately discuss braces. Extract the block scalar, then look for the
+# interpolation sequence in it.
+persona_text="$(awk '
+  /^[[:space:]]*persona:/ {
+    indent = match($0, /[^ ]/)
+    rest = substr($0, indent)
+    sub(/^persona:[[:space:]]*/, "", rest)
+    if (rest == "|" || rest == "|-" || rest == ">" || rest == ">-") { grab = 1; next }
+    print rest
+    next
+  }
+  grab {
+    if ($0 ~ /^[[:space:]]*$/) { print; next }
+    if (match($0, /[^ ]/) > indent) { print; next }
+    grab = 0
+  }
+' "$PATCH" 2>/dev/null)"
+if [ -z "$persona_text" ]; then
+  bad "could not read a persona value from $PATCH"
+elif printf '%s' "$persona_text" | grep -qF -e '{{'; then
+  bad "the persona value contains an interpolation sequence — strict rendering throws at assembly"
 else
-  ok "persona contains no template braces"
+  ok "persona value contains no interpolation sequence"
 fi
 
 echo "== 5. service environment =="
-for var in PIP_CACHE_DIR UV_CACHE_DIR CONDA_PKGS_DIRS MAMBA_ROOT_PREFIX; do
+for var in PIP_CACHE_DIR UV_CACHE_DIR CONDA_PKGS_DIRS MAMBA_ROOT_PREFIX            npm_config_cache npm_config_store_dir npm_config_prefix            PNPM_HOME COREPACK_HOME YARN_CACHE_FOLDER NPM_CONFIG_CACHE; do
   if [ -n "${!var:-}" ]; then
     bad "$var=${!var} is forwarded into the sandbox, where that host path does not exist"
   fi
@@ -155,8 +207,9 @@ if [ "$PROBE" -eq 1 ]; then
       p_ok()  { printf "  ok    %s\n" "$1"; }
       p_bad() { printf "  FAIL  %s\n" "$1"; fail=1; }
       t() { if eval "$2" >/dev/null 2>&1; then p_ok "$1"; else p_bad "$1"; fi; }
-      t "shared interpreter visible"        "command -v python3"
+      t "contract interpreter visible"      "test -x /usr/local/bin/python3"
       t "shared installer visible"          "command -v /usr/local/bin/uv"
+      t "node visible when installed"       "[ ! -x /usr/local/bin/node ] || /usr/local/bin/node -v"
       t "/etc/pip.conf readable"            "cat /etc/pip.conf"
       t "workspace writable"                "touch \"$PROBE_WS/.probe\" && rm -f \"$PROBE_WS/.probe\""
       t "/tmp writable (per-call tmpfs)"    "touch /tmp/.probe && rm -f /tmp/.probe"
@@ -166,7 +219,7 @@ if [ "$PROBE" -eq 1 ]; then
       t "/opt is absent"                    "[ ! -e /opt ]"
       t "/srv is absent"                    "[ ! -e /srv ]"
       t "/var is absent"                    "[ ! -e /var/lib ]"
-      t "network reachable"                 "python3 -c \"import urllib.request as u; u.urlopen(\\\"https://pypi.org/simple/\\\", timeout=8)\""
+      t "network reachable"                 "/usr/local/bin/python3 -c \"import urllib.request as u; u.urlopen(\\\"https://pypi.org/simple/\\\", timeout=8)\""
       exit $fail
     ' || FAILURES=$((FAILURES + 1))
 fi
@@ -179,8 +232,8 @@ cat <<'EOF'
   curl -s -N      localhost:3080/v1/users/$U/projects/$P/events &
   curl -s -X POST localhost:3080/v1/users/$U/projects/$P/turns \
     -H 'content-type: application/json' \
-    -d '{"message":"列出你可用的 skills，然后用 python-env skill 在工作区建 .venv 并安装 requests，最后做三重验证。"}'
-  # Expect: python-env listed; .venv created under the workspace; the shared
+    -d '{"message":"列出你可用的 skills，然后用 runtime-env skill 在工作区建 .venv 并安装 requests，最后做三重验证。"}'
+  # Expect: runtime-env listed; .venv created under the workspace; the shared
   # interpreter still raises ModuleNotFoundError; no path outside the workspace.
 EOF
 

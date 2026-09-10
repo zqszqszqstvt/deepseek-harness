@@ -32,11 +32,18 @@ RUN apt-get update \
 #    refuses a missing source path. Create it when the base image lacks it.
 RUN [ -d /lib64 ] || install -d /lib64
 
-# ③ Node.js and the dsh CLI (the server itself).
+# ③ Node.js and the dsh CLI (the server itself). The contract names one path in
+#    both install routes, so the runtime is published under /usr/local/bin
+#    whatever the package manager chose.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/* \
- && npm install -g @deepseek-ai/dsh
+ && npm install -g @deepseek-ai/dsh pnpm@11.7.0 \
+ && for tool in node npm npx pnpm; do \
+      real="$(command -v "$tool")"; \
+      [ "$real" = "/usr/local/bin/$tool" ] || ln -sfn "$real" "/usr/local/bin/$tool"; \
+    done \
+ && /usr/local/bin/node -v && /usr/local/bin/npm -v && /usr/local/bin/pnpm -v
 
 # ④ uv: one static binary into /usr/local/bin, the only agent-visible prefix.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
