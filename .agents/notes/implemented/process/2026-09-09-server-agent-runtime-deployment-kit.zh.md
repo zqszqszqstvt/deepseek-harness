@@ -12,7 +12,7 @@ Status: implemented
 
 ## Decision
 
-把契约作为部署套件交付在 [`deploy/dsh-server`](../../../../deploy/dsh-server/README.zh.md) 下，不改动任何 harness 代码。这个套件就是运维据以构建的产物：`Dockerfile` 把解释器装到 `/usr/local/bin/python3.12`、把 `uv` 装到 `/usr/local/bin/uv`、把包镜像源写到 `/etc/pip.conf` 与 `/etc/uv/uv.toml`、把 skill 拷到 `/usr/local/share/dsh/skills`、用 `chmod -R a-w /usr/local` 锁住共享层，并以 `DSH_HOME=/var/lib/dsh`、`--data-dir /var/lib/dsh/server-data` 创建服务用户；`cordis.patch.yml` 填写 base 组合刻意留空的 `system-prompt` persona 行；`skills/python-env/SKILL.md` 提供云端与本地执行器两套命令模板；`verify.sh` 负责宿主侧与命名空间内的验收；`workspace-gc.sh` 负责两类 harness 自有产物树。
+把契约作为部署套件交付在 [`deploy/dsh-server`](../../../../deploy/dsh-server/README.zh.md) 下，不改动任何 harness 代码。这个套件就是运维据以构建的产物：`Dockerfile` 与面向 apt 和 dnf/yum 宿主的 `install-host.sh` 把发行版解释器以 `python3` 的名义提供（当该名字缺失或版本对 uv 而言过旧时，发布为 `/usr/local/bin/python3`）、把 `uv` 装到 `/usr/local/bin/uv`、把包镜像源写到 `/etc/pip.conf` 与 `/etc/uv/uv.toml`、把 skill 拷到 `/usr/local/share/dsh/skills`、用 `chmod -R a-w /usr/local` 锁住共享层，并以 `DSH_HOME=/var/lib/dsh`、`--data-dir /var/lib/dsh/server-data` 创建服务用户；`cordis.patch.yml` 填写 base 组合刻意留空的 `system-prompt` persona 行；`skills/python-env/SKILL.md` 提供云端与本地执行器两套命令模板；`verify.sh` 负责宿主侧与命名空间内的验收；`workspace-gc.sh` 负责两类 harness 自有产物树。
 
 两个投递点正是强制执行面所允许的那两个。常驻文案走 `system-prompt.persona`：它作为 order-0 段落渲染进每个用户的每个会话，并且在组合阶段由宿主侧读取，因此工作区围栏根本不适用于它。按需模板走 bundled skill 根：`skill-filesystem` 把 `bundledSkillDir` 标记为可信，并用宿主文件系统调用而非 `ctx.fs` 列举和读取它——这是 Server 会话唯一能看到的宿主 skill 目录，通过 `DSH_BUNDLED_SKILL_DIR` 即可到达，不需要任何配置行。套件明确写出桌面侧的两个陷阱而不是留给后人重新发现，Server README 与 Server 子系统文档现在都承载了它们，因为一个"静默什么也不做"的部署决定属于参考文档，而不只属于运行手册。
 

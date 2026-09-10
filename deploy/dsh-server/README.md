@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-This directory is the deployment kit that makes Python usable inside a multi-user [`dsh server`](../../packages/bundle/server/README.md) deployment while keeping every user isolated. It requires **no harness code change**: the image supplies a read-only shared toolchain, the deployment patch supplies the resident contract, and the bundled skill supplies the on-demand command templates. The isolation argument is one sentence — the shared layer is read-only for everyone, and the only writable place is the calling session's own workspace, which strict bubblewrap binds per call. Two installation paths produce exactly the same layout: [`install-host.sh`](install-host.sh) on an existing Debian/Ubuntu host, or the [`Dockerfile`](Dockerfile) when the deployment is containerized. Nothing here requires a container.
+This directory is the deployment kit that makes Python usable inside a multi-user [`dsh server`](../../packages/bundle/server/README.md) deployment while keeping every user isolated. It requires **no harness code change**: the image supplies a read-only shared toolchain, the deployment patch supplies the resident contract, and the bundled skill supplies the on-demand command templates. The isolation argument is one sentence — the shared layer is read-only for everyone, and the only writable place is the calling session's own workspace, which strict bubblewrap binds per call. Two installation paths produce exactly the same layout: [`install-host.sh`](install-host.sh) on an existing Linux host (apt, dnf, or yum), or the [`Dockerfile`](Dockerfile) when the deployment is containerized. Nothing here requires a container.
 
 ## Directory contract
 
@@ -32,7 +32,7 @@ Three mechanisms decide the layout, and each one has a failure mode that looks l
 
 ## Install on a Linux host
 
-Use this path when `dsh server` already runs on a VM or bare host — it is the shorter one, because bubblewrap then needs no extra container privileges. The script is idempotent, installs the same directories the image contains, writes the systemd unit, and stops with a clear error when the interpreter cannot be provided.
+Use this path when `dsh server` already runs on a VM or bare host — it is the shorter one, because bubblewrap then needs no extra container privileges. The script is idempotent, detects the package manager (apt on Debian/Ubuntu, dnf or yum on RHEL, Rocky, Alma, Fedora, Amazon Linux), installs the same directories the image contains, writes the systemd unit, and stops with a clear error when the interpreter cannot be provided.
 
 ```bash
 sudo ./install-host.sh --data-dir /var/lib/dsh/server-data
@@ -41,7 +41,7 @@ sudo systemctl enable --now dsh-server
 ./verify.sh --bwrap-probe
 ```
 
-Unprivileged user namespaces must be enabled on the host: `kernel.unprivileged_userns_clone=1`, and on Ubuntu 24.04 also `kernel.apparmor_restrict_unprivileged_userns=0`. The unit adds no capability for this reason — if the host's bubblewrap is a setuid binary, drop `NoNewPrivileges` from the unit instead.
+Unprivileged user namespaces must be enabled on the host: `user.max_user_namespaces` nonzero, and on Ubuntu 24.04 also `kernel.apparmor_restrict_unprivileged_userns=0`. The unit adds no capability for this reason — if the host's bubblewrap is a setuid binary, drop `NoNewPrivileges` from the unit instead. On an SELinux host in `Enforcing` mode a failing probe is usually policy, not the kit: confirm with `setenforce 0`, then keep a policy module rather than leaving the host permissive. Pass `--no-lock` only on hosts that keep writable tooling under `/usr/local`, and accept that agents can then modify what other agents import.
 
 When the Server is started by hand instead of by systemd — for example `pnpm dsh server` from a repository checkout — skip the service user and copy the contract into the running user's own `$DSH_HOME`:
 

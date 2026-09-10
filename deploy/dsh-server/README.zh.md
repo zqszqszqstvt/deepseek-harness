@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-本目录是让 Python 在多用户 [`dsh server`](../../packages/bundle/server/README.zh.md) 部署里既可用又互相隔离的部署套件。它**不需要修改 harness 代码**：镜像提供只读共享工具链，部署层 patch 提供常驻契约，bundled skill 提供按需命令模板。隔离论证只有一句——共享层对所有人只读，唯一可写的地方是本次调用会话自己的工作区，而 strict bubblewrap 每次调用只绑定这一个工作区。两条安装路径产生完全相同的布局：在既有 Debian/Ubuntu 宿主上用 [`install-host.sh`](install-host.sh)，或在容器化部署时用 [`Dockerfile`](Dockerfile)。本套件不要求使用容器。
+本目录是让 Python 在多用户 [`dsh server`](../../packages/bundle/server/README.zh.md) 部署里既可用又互相隔离的部署套件。它**不需要修改 harness 代码**：镜像提供只读共享工具链，部署层 patch 提供常驻契约，bundled skill 提供按需命令模板。隔离论证只有一句——共享层对所有人只读，唯一可写的地方是本次调用会话自己的工作区，而 strict bubblewrap 每次调用只绑定这一个工作区。两条安装路径产生完全相同的布局：在既有 Linux 宿主（apt、dnf 或 yum）上用 [`install-host.sh`](install-host.sh)，或在容器化部署时用 [`Dockerfile`](Dockerfile)。本套件不要求使用容器。
 
 ## 目录契约
 
@@ -32,7 +32,7 @@ agent 需要触达的每个路径都必须位于 strict profile 会绑定的前�
 
 ## 在 Linux 宿主上安装
 
-当 `dsh server` 已经跑在虚拟机或裸机上时走这条路径——它更短，因为 bubblewrap 此时不需要任何额外的容器特权。脚本是幂等的，会安装与镜像相同的目录布局、写出 systemd unit，并在无法提供解释器时以明确错误停下。
+当 `dsh server` 已经跑在虚拟机或裸机上时走这条路径——它更短，因为 bubblewrap 此时不需要任何额外的容器特权。脚本是幂等的，会自动识别包管理器（Debian/Ubuntu 用 apt，RHEL、Rocky、Alma、Fedora、Amazon Linux 用 dnf 或 yum），安装与镜像相同的目录布局，写出 systemd unit，并在无法提供解释器时以明确错误停下。
 
 ```bash
 sudo ./install-host.sh --data-dir /var/lib/dsh/server-data
@@ -41,7 +41,7 @@ sudo systemctl enable --now dsh-server
 ./verify.sh --bwrap-probe
 ```
 
-宿主必须开启非特权 user namespace：`kernel.unprivileged_userns_clone=1`，Ubuntu 24.04 还需要 `kernel.apparmor_restrict_unprivileged_userns=0`。unit 正是因此不添加任何 capability——如果宿主的 bubblewrap 是 setuid 二进制，则改为从 unit 里去掉 `NoNewPrivileges`。
+宿主必须开启非特权 user namespace：`user.max_user_namespaces` 不为 0，Ubuntu 24.04 还需要 `kernel.apparmor_restrict_unprivileged_userns=0`。unit 正是因此不添加任何 capability——如果宿主的 bubblewrap 是 setuid 二进制，则改为从 unit 里去掉 `NoNewPrivileges`。在 SELinux 为 `Enforcing` 的宿主上，探针失败通常是策略而不是套件的问题：先用 `setenforce 0` 确认，然后保留一个策略模块而不是把宿主长期停在 permissive。只有当宿主把可写工具放在 `/usr/local` 下时才传 `--no-lock`，并接受“agent 能修改其他 agent 会 import 的东西”这个后果。
 
 当 Server 是手工启动而不是由 systemd 托管时——例如在仓库检出目录里跑 `pnpm dsh server`——跳过服务用户，把契约拷进运行用户自己的 `$DSH_HOME`：
 

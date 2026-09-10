@@ -39,9 +39,10 @@ RestartSec=5
 
 # The sandbox needs to create mount and PID namespaces. Do not add CAP_SYS_ADMIN
 # to the unit: bubblewrap creates an unprivileged user namespace, and the host
-# must allow it (sysctl kernel.unprivileged_userns_clone=1, and on Ubuntu 24.04
-# kernel.apparmor_restrict_unprivileged_userns=0). If this host's bubblewrap is a
-# setuid binary instead, NoNewPrivileges must be dropped for it to work.
+# must allow it (user.max_user_namespaces nonzero; on Ubuntu 24.04 also
+# kernel.apparmor_restrict_unprivileged_userns=0; on an SELinux host in Enforcing
+# mode, a policy module rather than a permissive host). If this host's bubblewrap
+# is a setuid binary instead, NoNewPrivileges must be dropped for it to work.
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes

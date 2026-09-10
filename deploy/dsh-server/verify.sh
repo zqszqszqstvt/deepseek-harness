@@ -35,6 +35,29 @@ DATA_DIR="${DSH_DATA_DIR:-$DSH_HOME_DIR/server-data}"
 echo "== 1. sandbox runtime =="
 check "bubblewrap installed" 'command -v bwrap'
 check "/lib64 exists (bwrap ro-binds it unconditionally)" 'test -d /lib64'
+maxns="$(cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo unknown)"
+if [ "$maxns" = "0" ]; then
+  bad "user.max_user_namespaces=0 — bubblewrap cannot create a namespace"
+elif [ "$maxns" = "unknown" ]; then
+  warn "user.max_user_namespaces not readable"
+else
+  ok "user.max_user_namespaces=$maxns"
+fi
+if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+  aa="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+  if [ "$aa" != "0" ]; then
+    bad "kernel.apparmor_restrict_unprivileged_userns=$aa (Ubuntu 24.04: set it to 0)"
+  else
+    ok "apparmor allows unprivileged user namespaces"
+  fi
+fi
+if command -v getenforce >/dev/null 2>&1; then
+  selinux="$(getenforce 2>/dev/null || echo unknown)"
+  printf '  info  SELinux=%s\n' "$selinux"
+  if [ "$selinux" = Enforcing ]; then
+    warn "SELinux Enforcing: if --bwrap-probe fails, confirm with 'setenforce 0' and then fix policy rather than staying permissive"
+  fi
+fi
 
 echo "== 2. shared read-only layer =="
 check "$PYTHON on PATH" "command -v $PYTHON"
