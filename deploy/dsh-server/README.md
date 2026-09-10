@@ -10,7 +10,7 @@ Every path an agent must reach has to live under a prefix the strict profile bin
 
 | Absolute path | What lives there | Inside the sandbox | Owner and mode |
 | --- | --- | --- | --- |
-| `python3` — `/usr/bin/python3` on a host, `/usr/local/bin/python3` in the image | shared interpreter | read-only | distribution package; the bind, not the mode bits, is what enforces it |
+| `/usr/local/bin/python3` | shared interpreter: a symlink to the newest installed interpreter that has `venv` and `ensurepip` and is new enough for `uv` | read-only | distribution package; the bind, not the mode bits, is what enforces it |
 | `/usr/local/bin/uv`, `/usr/local/bin/uvx` | shared installer/resolver | read-only | `root:root 0755` |
 | `/etc/pip.conf`, `/etc/uv/uv.toml` | optional index config; absent means the public index | read-only | `root:root 0644`, no credentials |
 | `/usr/local/share/dsh/skills/python-env/SKILL.md` | model-facing command templates | not needed: read host-side | `root:root`, `a-w` |

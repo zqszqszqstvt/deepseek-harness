@@ -117,17 +117,18 @@ if [ -z "$PY_BIN" ]; then
   echo "         dnf: install python3.12 python3.12-pip (or python3.11 / python39)" >&2
   exit 1
 fi
-# The contract names plain `python3`. On RHEL-family that name may be missing or
-# point at an interpreter too old for uv, so publish the chosen one under
-# /usr/local/bin, which precedes /usr/bin on PATH and is ro-bound like it.
-if [ "$(command -v python3 2>/dev/null || echo none)" != "$PY_BIN" ]; then
-  ln -sfn "$PY_BIN" /usr/local/bin/python3
-  echo "   linked /usr/local/bin/python3 -> $PY_BIN"
-fi
-printf '   %s at %s\n' "$(/usr/local/bin/python3 -VV 2>&1 | head -1 || "$PY_BIN" -VV 2>&1 | head -1)" \
-  "$(command -v python3)"
-/usr/local/bin/python3 -c 'import ensurepip, venv; print("   venv+ensurepip ok")' 2>/dev/null \
-  || "$PY_BIN" -c 'import ensurepip, venv; print("   venv+ensurepip ok")'
+# Publish the chosen interpreter at ONE deterministic path. Bare `python3` is not
+# safe to name in the contract: what it resolves to follows the PATH of whoever
+# started the Server (sudo's secure_path puts /bin ahead of /usr/local/bin), and
+# the distribution's own python3 can be older than uv supports (3.6 on RHEL 8
+# lineage). /usr/local/bin is ro-bound like the rest of /usr, so the symlink is
+# visible to every session and cannot be modified from inside one.
+ln -sfn "$PY_BIN" /usr/local/bin/python3
+printf '   contract path /usr/local/bin/python3 -> %s
+' "$PY_BIN"
+printf '   %s
+' "$(/usr/local/bin/python3 -VV 2>&1 | head -1)"
+/usr/local/bin/python3 -c 'import ensurepip, venv; print("   venv+ensurepip ok")'
 
 echo "== 3. uv at /usr/local/bin/uv =="
 if [ ! -x /usr/local/bin/uv ]; then

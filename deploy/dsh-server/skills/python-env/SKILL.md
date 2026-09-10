@@ -15,18 +15,18 @@ Shared layer, provided by the image and read-only:
 
 | Path | What it is |
 | --- | --- |
-| `python3` | shared interpreter (`/usr/bin/python3` on a host install, `/usr/local/bin/python3` in the container image) |
+| `/usr/local/bin/python3` | shared interpreter (a symlink to the newest interpreter with `venv` and `ensurepip`) |
 | `/usr/local/bin/uv`, `/usr/local/bin/uvx` | shared installer and resolver |
 | `/etc/pip.conf`, `/etc/uv/uv.toml` | optional index config; absent means the public index |
 
-Writing anywhere in the shared layer returns EROFS. That is the isolation contract: per-task packages belong in a workspace-local environment.
+Always use these absolute paths. Bare `python3` resolves through the PATH inherited from the Server process and may be an older distribution interpreter that `uv` refuses. Writing anywhere in the shared layer returns EROFS, because the strict profile ro-binds `/usr`: that is the isolation contract, and per-task packages belong in a workspace-local environment.
 
 ### Stage 0 — probe once, in a single call
 
 ```sh
-python3 -VV; /usr/local/bin/uv --version; command -v git curl
+/usr/local/bin/python3 -VV; /usr/local/bin/uv --version; command -v git curl
 cat /etc/pip.conf 2>/dev/null | head -5
-python3 -c 'import urllib.request as u; print("net=", u.urlopen("https://pypi.org/simple/", timeout=8).status)' 2>&1 | tail -1
+/usr/local/bin/python3 -c 'import urllib.request as u; print("net=", u.urlopen("https://pypi.org/simple/", timeout=8).status)' 2>&1 | tail -1
 ```
 
 Do not probe `$HOME` (`touch $HOME/.wtest`, `df -h $HOME`): it is not mounted, so the call is wasted.
@@ -34,13 +34,13 @@ Do not probe `$HOME` (`touch $HOME/.wtest`, `df -h $HOME`): it is not mounted, s
 ### Stage 1 — create the environment inside the workspace
 
 ```sh
-UV_CACHE_DIR="$PWD/.cache/uv" /usr/local/bin/uv venv .venv --python python3
+UV_CACHE_DIR="$PWD/.cache/uv" /usr/local/bin/uv venv .venv --python /usr/local/bin/python3
 ```
 
 Fallback when `uv` is unavailable:
 
 ```sh
-python3 -m venv .venv && .venv/bin/python -m pip install -q -U pip
+/usr/local/bin/python3 -m venv .venv && .venv/bin/python -m pip install -q -U pip
 ```
 
 ### Stage 2 — install in the background
@@ -59,8 +59,8 @@ pip equivalent, and the two fallbacks:
 ```sh
 PIP_CACHE_DIR="$PWD/.cache/pip" .venv/bin/python -m pip install -q --no-input pandas==2.2.3 > .cache/install.log 2>&1
 # no venv possible (missing ensurepip): install into a directory and inline PYTHONPATH on EVERY later command
-PIP_CACHE_DIR="$PWD/.cache/pip" python3 -m pip install -q --no-input --target .pylibs pandas==2.2.3
-PYTHONPATH="$PWD/.pylibs" python3 script.py
+PIP_CACHE_DIR="$PWD/.cache/pip" /usr/local/bin/python3 -m pip install -q --no-input --target .pylibs pandas==2.2.3
+PYTHONPATH="$PWD/.pylibs" /usr/local/bin/python3 script.py
 ```
 
 ### Stage 3 — run and verify
@@ -68,7 +68,7 @@ PYTHONPATH="$PWD/.pylibs" python3 script.py
 ```sh
 .venv/bin/python -c "import pandas; print(pandas.__version__)"   # ① the target environment works
 .venv/bin/python script.py                                        # ② the real script runs
-python3 -c "import pandas" 2>&1 | tail -1       # ③ the shared interpreter must NOT see it
+/usr/local/bin/python3 -c "import pandas" 2>&1 | tail -1       # ③ the shared interpreter must NOT see it
 ```
 
 Verification ③ is what proves the install stayed inside the workspace instead of touching the shared layer.

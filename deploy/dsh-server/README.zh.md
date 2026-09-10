@@ -10,7 +10,7 @@ agent 需要触达的每个路径都必须位于 strict profile 会绑定的前�
 
 | 绝对路径 | 存放内容 | 沙箱内 | 属主与权限 |
 | --- | --- | --- | --- |
-| `python3`——宿主上是 `/usr/bin/python3`，镜像里是 `/usr/local/bin/python3` | 共享解释器 | 只读 | 发行版软件包；真正的保证来自绑定挂载，而不是权限位 |
+| `/usr/local/bin/python3` | 共享解释器：软链到已安装的、带 `venv` 与 `ensurepip` 且版本满足 `uv` 要求的最新解释器 | 只读 | 发行版软件包；真正的保证来自绑定挂载，而不是权限位 |
 | `/usr/local/bin/uv`、`/usr/local/bin/uvx` | 共享安装器/解析器 | 只读 | `root:root 0755` |
 | `/etc/pip.conf`、`/etc/uv/uv.toml` | 可选的源配置；缺失即使用公网源 | 只读 | `root:root 0644`，不含凭据 |
 | `/usr/local/share/dsh/skills/python-env/SKILL.md` | 面向模型的命令模板 | 不需要：宿主侧读取 | `root:root`、`a-w` |
